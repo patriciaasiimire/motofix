@@ -25,7 +25,7 @@ Interactive API docs: `/docs`.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `SECRET_KEY` | `change_me_in_production` | JWT signing key (must match the other services). |
+| `SECRET_KEY` | Required | JWT signing key (must match the auth service and be set before startup). |
 | `ALGORITHM`  | `HS256` | JWT algorithm. |
 | `ENV`        | `development` | Reported in `/config`. |
 | `AUTH_SERVICE_URL` | `http://localhost:8000` | Registry entry — auth. |

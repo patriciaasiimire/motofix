@@ -27,12 +27,12 @@ import { cn } from '@/lib/utils';
 
 // ─── Status timeline ──────────────────────────────────────────────────────────
 const STATUS_STEPS = [
-  { key: 'pending',               label: 'Request Sent',            desc: 'Looking for a nearby mechanic' },
-  { key: 'accepted',              label: 'Mechanic Accepted',        desc: 'Mechanic is on their way' },
-  { key: 'en_route',              label: 'Mechanic On the Way',      desc: 'Your mechanic is heading to you' },
-  { key: 'arrived',               label: 'Mechanic Arrived',         desc: 'Mechanic has arrived at your location' },
-  { key: 'service_started',       label: 'Service Started',          desc: 'Repair work has started' },
-  { key: 'awaiting_confirmation', label: 'Confirm Job Done',         desc: 'Mechanic says work is complete — please confirm below' },
+  { key: 'pending',               label: 'Request Sent',            desc: 'Looking for a verified provider for this job type' },
+  { key: 'accepted',              label: 'Provider Accepted',        desc: 'Your provider is preparing to help' },
+  { key: 'en_route',              label: 'Provider On the Way',      desc: 'Your provider is heading to you' },
+  { key: 'arrived',               label: 'Provider Arrived',         desc: 'Your provider has arrived at your location' },
+  { key: 'service_started',       label: 'Assessment Started',       desc: 'On-site assessment or service has started' },
+  { key: 'awaiting_confirmation', label: 'Confirm Job Done',         desc: 'Your provider says the job is complete — please confirm below' },
   { key: 'completed',             label: 'Job Completed',            desc: 'Repair confirmed and done' },
 ] as const;
 
@@ -574,6 +574,7 @@ export default function RequestDetail() {
   const { requests, paymentsEnabled, sendWsMessage, markCancelled, revertCancelled } = useRequests();
 
   const [request, setRequest] = useState<Request | null>(null);
+  const jobTypeLabel = /tow|recovery/i.test(request?.service_type ?? '') ? 'Tow / recovery' : 'Roadside assist';
   const [isLoading, setIsLoading] = useState(true);
   const [isCalling, setIsCalling] = useState(false);
   const [displayLocation, setDisplayLocation] = useState('');
@@ -865,6 +866,9 @@ export default function RequestDetail() {
         sessionStorage.setItem('motofix_pending_review', JSON.stringify({
           requestId: String(id),
           mechanicName: (request as any).mechanic_name ?? 'your mechanic',
+          mechanicId: request.mechanic_id,
+          serviceType: request.service_type,
+          description: request.description,
         }));
       } catch {}
     }
@@ -1522,7 +1526,7 @@ export default function RequestDetail() {
               return (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-faint, rgba(255,255,255,0.4))', textTransform: 'uppercase', letterSpacing: '0.12em' }}>
-                    Job Progress
+                    {jobTypeLabel} · Job Progress
                   </span>
                   <div style={{
                     display: 'flex', alignItems: 'center', gap: 6,
@@ -1678,6 +1682,9 @@ export default function RequestDetail() {
                   sessionStorage.setItem('motofix_pending_review', JSON.stringify({
                     requestId: String(id),
                     mechanicName: (request as any).mechanic_name ?? 'your mechanic',
+                    mechanicId: request.mechanic_id,
+                    serviceType: request.service_type,
+                    description: request.description,
                   }));
                 } catch {}
                 toast.success('Job confirmed. Thank you!');
@@ -1893,6 +1900,9 @@ export default function RequestDetail() {
                     mode: 'mechanic',
                     requestId: String(id),
                     mechanicName: (request as any).mechanic_name ?? 'your mechanic',
+                    mechanicId: request.mechanic_id,
+                    serviceType: request.service_type,
+                    description: request.description,
                   },
                 })}
                 style={{

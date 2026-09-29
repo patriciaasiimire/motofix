@@ -35,7 +35,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SECRET_KEY  = os.getenv("SECRET_KEY", "change_me_in_production")
+def _require_secret() -> str:
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        logger.critical("Missing required SECRET_KEY environment variable for motofix-insurance-service")
+        raise RuntimeError(
+            "Missing required SECRET_KEY environment variable for motofix-insurance-service. "
+            "This service must fail loudly instead of accepting unsigned tokens."
+        )
+    return secret
+
+
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM   = os.getenv("ALGORITHM", "HS256")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:password@localhost:5433/motofix_insurance")
 UPLOADS_DIR  = Path(os.getenv("UPLOADS_DIR", "./uploads/claims"))
@@ -45,6 +56,7 @@ UPLOADS_DIR  = Path(os.getenv("UPLOADS_DIR", "./uploads/claims"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _require_secret()
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     app.state.pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
     await _create_tables(app.state.pool)
@@ -246,6 +258,7 @@ async def health():
     return {
         "status": "ok",
         "service": "motofix-insurance-service",
+        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

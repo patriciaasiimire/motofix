@@ -25,7 +25,7 @@ Interactive API docs at `/docs`. Main groups:
 |-------|----------|
 | Mechanic auth | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` |
 | Mechanic self-service | `PATCH /mechanics/me/availability`, `PATCH /mechanics/me/location`, `GET /mechanics/me/current-job`, `GET /mechanics/me/{completed-jobs,handled-jobs,job-history,strikes,reviews}`, `POST /mechanics/me/fcm-token` |
-| Mechanics CRUD (`/mechanics`, used by admin) | `POST /mechanics/`, `GET /mechanics/`, `GET|PATCH|DELETE /mechanics/{id}` |
+| Matching provider list (`/mechanics`) | `GET /mechanics/` (verified/available filters; provider writes are owned by auth-service) |
 | System | `GET /health` |
 
 ## Configuration (environment)

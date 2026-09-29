@@ -14,13 +14,24 @@ import jwt as pyjwt
 from ..db import get_db
 
 router = APIRouter(prefix="/subscriptions", tags=["Subscriptions"])
+LEGACY_SUBSCRIPTIONS_ENABLED = os.getenv("ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS", "").lower() == "true"
+
+
+def _legacy_subscription_guard() -> None:
+    if not LEGACY_SUBSCRIPTIONS_ENABLED:
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy subscription routes are disabled by default. Set ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS=true to enable them.",
+        )
 
 # ── Token validation ──────────────────────────────────────────────────────────
-# Uses the same SECRET_KEY as all other services so mechanic JWTs are accepted.
+# Uses the same secret as the auth service so mechanic JWTs are accepted.
 
 _bearer = HTTPBearer()
-SECRET_KEY = os.getenv("SECRET_KEY", "change_me_in_production")
+SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("ADMIN_JWT_SECRET")
 ALGORITHM  = os.getenv("ALGORITHM", "HS256")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY is required for analytics-service subscription verification")
 
 TRIAL_DAYS = 7
 GRACE_DAYS = 3
@@ -105,6 +116,7 @@ async def get_my_subscription(
     Return the current subscription state for the authenticated mechanic.
     If no subscription record exists, creates a default 7-day trial starting now.
     """
+    _legacy_subscription_guard()
     mechanic_id = _provider_id(provider)
     if not mechanic_id:
         raise HTTPException(status_code=400, detail="Cannot determine mechanic ID from token")

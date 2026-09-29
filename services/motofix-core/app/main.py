@@ -28,7 +28,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change_me_in_production")
+def _require_secret() -> str:
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        logger.critical("Missing required SECRET_KEY environment variable for motofix-core")
+        raise RuntimeError(
+            "Missing required SECRET_KEY environment variable for motofix-core. "
+            "This service must fail loudly instead of accepting unsigned tokens."
+        )
+    return secret
+
+
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM  = os.getenv("ALGORITHM", "HS256")
 
 # ── Service registry ──────────────────────────────────────────────────────────
@@ -50,6 +61,7 @@ SERVICES: Dict[str, str] = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _require_secret()
     logger.info("=" * 60)
     logger.info("🚀 MOTOFIX Core Gateway v1.0 starting")
     logger.info("Registered services: %s", list(SERVICES.keys()))
@@ -131,7 +143,7 @@ def _require_token(authorization: str = Header(...)) -> dict:
     except ValueError:
         raise HTTPException(status_code=401, detail="Malformed Authorization header")
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(token, _require_secret(), algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
@@ -166,6 +178,7 @@ async def health():
     return {
         "status": "ok",
         "service": "motofix-core",
+        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

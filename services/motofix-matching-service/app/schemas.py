@@ -22,6 +22,10 @@ class MatchRequest(BaseModel):
         default_factory=list,
         description="IDs of mechanics already tried for this request (manual override; DB history is also used automatically)",
     )
+    preferred_mechanic_id: Optional[int] = Field(
+        None,
+        description="Driver's saved helper; boosted only when verified, available, nearby, and capable for this job type.",
+    )
     top_n: Optional[int] = Field(5, description="Maximum number of candidates to return", ge=1, le=20)
 
 

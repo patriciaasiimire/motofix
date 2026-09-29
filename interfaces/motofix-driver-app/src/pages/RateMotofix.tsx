@@ -16,7 +16,7 @@ import {
   ThumbsUp,
   Wrench,
 } from 'lucide-react';
-import { requestsService } from '@/config/api';
+import { authService, requestsService } from '@/config/api';
 import { toast } from 'sonner';
 
 const Y = '#F59E0B';
@@ -59,6 +59,9 @@ const MECHANIC_RATING_COPY: Record<number, { title: string; body: string }> = {
 interface LocationState {
   requestId?: string;
   mechanicName?: string;
+  mechanicId?: string | number;
+  serviceType?: string;
+  description?: string;
   mode?: 'mechanic';
 }
 
@@ -69,6 +72,7 @@ export default function RateMotofix() {
   const isMechanicMode = state.mode === 'mechanic' && !!state.requestId;
   const requestId = state.requestId;
   const mechanicName = state.mechanicName ?? 'your mechanic';
+  const mechanicId = Number(state.mechanicId);
 
   const [rating, setRating] = useState(0);
   const [hovered, setHovered] = useState(0);
@@ -76,6 +80,9 @@ export default function RateMotofix() {
   const [feedback, setFeedback] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [preferenceStepDone, setPreferenceStepDone] = useState(!isMechanicMode || !Number.isSafeInteger(mechanicId) || mechanicId <= 0);
+  const [savingPreference, setSavingPreference] = useState(false);
+  const [preferredSaved, setPreferredSaved] = useState(false);
 
   const TAGS = isMechanicMode ? MECHANIC_TAGS : APP_TAGS;
   const RATING_COPY = isMechanicMode ? MECHANIC_RATING_COPY : APP_RATING_COPY;
@@ -145,6 +152,34 @@ export default function RateMotofix() {
     } else {
       navigate('/settings', { replace: true, state: { skipSettingsIntro: true } });
     }
+  };
+
+  const savePreferredHelper = async () => {
+    if (!Number.isSafeInteger(mechanicId) || mechanicId <= 0 || savingPreference) return;
+    setSavingPreference(true);
+    try {
+      await authService.savePreferences({ preferred_mechanic_id: mechanicId });
+      setPreferredSaved(true);
+      setPreferenceStepDone(true);
+    } catch {
+      toast.error('Could not save your preferred helper. You can still request help again.');
+    } finally {
+      setSavingPreference(false);
+    }
+  };
+
+  const requestSimilarHelp = () => {
+    const tow = /tow|recovery/i.test(state.serviceType ?? '');
+    navigate('/locating', {
+      state: {
+        skipTriage: true,
+        issueType: tow ? 'towing' : 'other',
+        serviceType: tow ? 'towing_provider' : 'mechanic',
+        reRequestServiceType: tow ? 'Tow / recovery' : 'Roadside assist',
+        reRequestDescription: state.description ?? '',
+        reRequestId: requestId,
+      },
+    });
   };
 
   const pageTitle = isMechanicMode ? `Rate ${mechanicName}` : 'Rate MOTOFIX';
@@ -399,6 +434,34 @@ export default function RateMotofix() {
             </div>
           ) : (
             <div style={{ padding: '22px 20px 20px' }}>
+              {isMechanicMode && !preferenceStepDone && (
+                <div style={{ borderRadius: 16, border: `1px solid ${Y}55`, background: `${Y}0d`, padding: 16, marginBottom: 18 }}>
+                  <h3 style={{ color: 'var(--text-hi)', fontSize: 15, fontWeight: 900, marginBottom: 5 }}>Save {mechanicName} as your preferred helper?</h3>
+                  <p style={{ color: 'var(--text-md)', fontSize: 12, lineHeight: 1.55, marginBottom: 13 }}>
+                    Motofix will try them first when they are verified, available, nearby, and right for the job. Otherwise, we’ll look for the next suitable provider.
+                  </p>
+                  <div style={{ display: 'flex', gap: 9 }}>
+                    <button onClick={savePreferredHelper} disabled={savingPreference} style={{ flex: 1, minHeight: 42, border: 'none', borderRadius: 12, background: Y, color: '#111827', fontWeight: 800, fontSize: 12, cursor: 'pointer', opacity: savingPreference ? 0.65 : 1 }}>
+                      {savingPreference ? 'Saving…' : 'Save as preferred'}
+                    </button>
+                    <button onClick={() => setPreferenceStepDone(true)} style={{ minHeight: 42, padding: '0 13px', border: '1px solid var(--border-3)', borderRadius: 12, background: 'var(--surface-2)', color: 'var(--text-md)', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                      Not now
+                    </button>
+                  </div>
+                </div>
+              )}
+              {isMechanicMode && preferenceStepDone && (
+                <div style={{ borderRadius: 14, background: 'var(--surface-2)', border: '1px solid var(--border-2)', padding: '11px 13px', marginBottom: 14 }}>
+                  <p style={{ color: 'var(--text-md)', fontSize: 12, lineHeight: 1.5 }}>
+                    {preferredSaved ? `${mechanicName} is saved as your preferred helper.` : 'Your next request stays on Motofix: we’ll check your preferred helper first, then the next suitable verified provider.'}
+                  </p>
+                </div>
+              )}
+              {isMechanicMode && preferenceStepDone && (
+                <button onClick={requestSimilarHelp} style={{ width: '100%', minHeight: 50, border: 'none', borderRadius: 14, background: `linear-gradient(135deg, ${Y}, #D97706)`, color: '#111827', fontSize: 13, fontWeight: 900, cursor: 'pointer', marginBottom: 12 }}>
+                  Need help again? Request in Motofix
+                </button>
+              )}
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(3, 1fr)',

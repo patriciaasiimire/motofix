@@ -20,6 +20,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _require_secret() -> str:
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        logging.getLogger(__name__).critical(
+            "Missing required SECRET_KEY environment variable for motofix-verification-service"
+        )
+        raise RuntimeError("SECRET_KEY environment variable is required before verification-service startup")
+    return secret
+
 from app.routers import mechanics
 from app.routers import auth as auth_router
 
@@ -32,6 +42,7 @@ pool: asyncpg.Pool = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pool
+    _require_secret()
     dsn = os.getenv("DATABASE_URL")
     if not dsn:
         raise RuntimeError("DATABASE_URL environment variable is not set")
@@ -137,6 +148,7 @@ async def health():
         "status": "ok",
         "service": "motofix-mechanics-service",
         "database": "connected" if pool else "disconnected",
+        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
         "timestamp": datetime.utcnow().isoformat() + "Z",
     }
 
@@ -145,4 +157,4 @@ app.include_router(auth_router.router)   # /auth/login, /auth/register, /auth/me
                                          # /mechanics/me/availability
                                          # /mechanics/me/location
                                          # /mechanics/me/current-job
-app.include_router(mechanics.router)     # /mechanics/ CRUD (used by admin dashboard)
+app.include_router(mechanics.router)     # /mechanics/ read-only listing for matching

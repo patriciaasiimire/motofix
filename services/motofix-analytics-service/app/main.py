@@ -81,11 +81,19 @@ app.add_middleware(
 # ─────────────── INCLUDE ROUTERS ───────────────
 app.include_router(auth.router)           # /api/login
 app.include_router(admin.router)          # /admin/*
-app.include_router(subscriptions.router)  # /subscriptions/*
+if os.getenv("ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS", "").lower() == "true":
+    app.include_router(subscriptions.router)  # /subscriptions/*
 
 # ─────────────── STARTUP / SHUTDOWN ───────────────
 @app.on_event("startup")
 async def on_startup():
+    secret = os.getenv("ADMIN_JWT_SECRET") or os.getenv("SECRET_KEY")
+    if not secret:
+        logger.critical("Missing required ADMIN_JWT_SECRET environment variable for analytics-service")
+        raise RuntimeError(
+            "Missing required ADMIN_JWT_SECRET environment variable for analytics-service. "
+            "This service must fail loudly instead of accepting unsigned admin tokens."
+        )
     await init_db_pool(app)
 
 @app.on_event("shutdown")
@@ -100,6 +108,7 @@ async def health_check():
     return {
         "status": "ok",
         "service": "admin-dashboard",
+        "jwt_secret_configured": bool(os.getenv("ADMIN_JWT_SECRET") or os.getenv("SECRET_KEY")),
         "database": "connected" if pool else "disconnected"
     }
 

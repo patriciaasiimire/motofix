@@ -25,7 +25,7 @@ const FAULTS = [
   { id: 'engine',     serviceType: 'mechanic',        label: 'Engine Fault',  desc: 'Stalled or warning light', Icon: Zap        },
   { id: 'battery',    serviceType: 'mechanic',        label: 'Dead Battery',  desc: "Won't start or weak",      Icon: Battery    },
   { id: 'fuel',       serviceType: 'mechanic',        label: 'Out of Fuel',   desc: 'Ran dry or fuel leak',     Icon: Droplets   },
-  { id: 'towing',     serviceType: 'towing_provider', label: 'Need Towing',   desc: "Vehicle won't move",       Icon: Truck      },
+  { id: 'towing',     serviceType: 'towing_provider', label: 'Tow / recovery', desc: "Vehicle can't be driven safely", Icon: Truck },
   { id: 'other',      serviceType: 'mechanic',        label: 'Other Issue',   desc: 'Something else entirely',  Icon: HelpCircle },
 ];
 

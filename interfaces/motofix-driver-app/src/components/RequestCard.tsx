@@ -2,7 +2,7 @@
 // lists. Displays the service type, status, time and location (turning raw coordinates
 // into a readable address), and links through to the full request detail.
 
-import { MapPin, Wrench, Clock, ChevronRight, Phone, Loader2 } from 'lucide-react';
+import { MapPin, Wrench, Clock, ChevronRight, Phone, Loader2, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { requestsService } from '@/config/api';
 import { toast } from 'sonner';
@@ -22,6 +22,7 @@ interface Request {
 interface RequestCardProps {
   request: Request;
   index: number;
+  onReRequest?: () => void;
 }
 
 const statusConfig: Record<string, { label: string; className: string }> = {
@@ -49,7 +50,7 @@ const statusConfig: Record<string, { label: string; className: string }> = {
 
 type GeocodeStatus = 'idle' | 'loading' | 'done' | 'error';
 
-export function RequestCard({ request, index }: RequestCardProps) {
+export function RequestCard({ request, index, onReRequest }: RequestCardProps) {
   const navigate = useNavigate();
   const status = statusConfig[request.status] || statusConfig.pending;
   const [isCalling, setIsCalling] = useState(false);
@@ -203,6 +204,16 @@ export function RequestCard({ request, index }: RequestCardProps) {
           </button>
         </div>
       </div>
+
+      {request.status === 'completed' && onReRequest && (
+        <button
+          onClick={onReRequest}
+          className="mt-3 flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border border-primary/35 bg-primary/10 px-3 text-sm font-semibold text-primary transition-colors hover:bg-primary/15"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Need similar help again?
+        </button>
+      )}
     </div>
   );
 }

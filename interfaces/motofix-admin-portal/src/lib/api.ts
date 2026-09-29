@@ -13,8 +13,7 @@
 // the useDashboardData hook or React Query — instead of calling axios from a page.
 
 import { API_CONFIG } from '@/config/api';
-import requestsClient, { mechanicsClient, authClient } from './axiosClient';
-import axios from 'axios';
+import requestsClient, { authClient } from './axiosClient';
 
 // Use an empty base in development so requests go to the dev server origin
 // and are proxied by Vite to the hosted API (avoids CORS). In production
@@ -124,9 +123,7 @@ export interface DashboardStats {
   totalMechanics: number;
   verifiedMechanics: number;
   revenueCollected: number;
-  paidToMechanics: number;
-  commissionEarned: number;
-  profit: number;
+  pendingCollections: number;
 }
 
 export interface RevenueData {
@@ -134,84 +131,22 @@ export interface RevenueData {
   amount: number;
 }
 
-export const fetchDashboardStats = async () => {
-  // Try the requests service /stats/ endpoint first (public service)
-  try {
-    const resp = await requestsClient.get('/stats/');
-    const raw = resp.data || {};
-    return {
-      totalRequests: raw.total_requests ?? raw.totalRequests ?? 0,
-      completedJobs: raw.completed_jobs ?? raw.completedJobs ?? 0,
-      pendingJobs: raw.pending_jobs ?? raw.pendingJobs ?? 0,
-      totalMechanics: raw.total_mechanics ?? raw.totalMechanics ?? 0,
-      verifiedMechanics: raw.verified_mechanics ?? raw.verifiedMechanics ?? 0,
-      revenueCollected: raw.revenue_collected_ugx ?? raw.revenueCollectedUgx ?? 0,
-      paidToMechanics: raw.paid_to_mechanics_ugx ?? raw.paidToMechanicsUgx ?? 0,
-      commissionEarned: raw.commission_earned_ugx ?? raw.commissionEarnedUgx ?? 0,
-      profit:
-        raw.profit_ugx ?? raw.profitUgx ?? ((raw.revenue_collected_ugx || raw.revenueCollectedUgx || 0) - (raw.paid_to_mechanics_ugx || raw.paidToMechanicsUgx || 0)),
-    } as DashboardStats;
-  } catch (e: any) {
-    // If /stats/ doesn't exist or failed, fallback to fetching /requests/ and computing
-    if (axios.isAxiosError(e) && e.response?.status === 404) {
-      // fallback
-    } else {
-      console.warn('fetchDashboardStats: stats endpoint failed, falling back to requests list', e?.message || e);
-    }
-  }
-
-  // Fallback: fetch all requests and compute counts client-side
-  try {
-    const resp = await requestsClient.get('/requests/');
-    const rawRequests = Array.isArray(resp.data) ? resp.data : [];
-    const totalRequests = rawRequests.length;
-    const completedJobs = rawRequests.filter((r: any) => r.status === 'completed').length;
-    const pendingJobs = rawRequests.filter((r: any) => r.status === 'pending').length;
-    // The requests service may not provide mechanics list - default to zero
-    const totalMechanics = 0;
-    const verifiedMechanics = 0;
-    const revenueCollected = rawRequests.reduce((sum: number, r: any) => sum + Number(r.amount_collected_ugx || r.amount || 0), 0);
-    const paidToMechanics = 0;
-    const profit = revenueCollected - paidToMechanics;
-    return {
-      totalRequests,
-      completedJobs,
-      pendingJobs,
-      totalMechanics,
-      verifiedMechanics,
-      revenueCollected,
-      paidToMechanics,
-      commissionEarned: 0,
-      profit,
-    } as DashboardStats;
-  } catch (err) {
-    console.error('Failed to fetch requests for stats fallback', err);
-    // Return safe defaults
-    return {
-      totalRequests: 0,
-      completedJobs: 0,
-      pendingJobs: 0,
-      totalMechanics: 0,
-      verifiedMechanics: 0,
-      revenueCollected: 0,
-      paidToMechanics: 0,
-      commissionEarned: 0,
-      profit: 0,
-    } as DashboardStats;
-  }
+export const fetchDashboardStats = async (): Promise<DashboardStats> => {
+  const raw = await fetchWithAuth<any>('/admin/stats');
+  return {
+    totalRequests: Number(raw.total_requests ?? 0),
+    completedJobs: Number(raw.completed_jobs ?? 0),
+    pendingJobs: Number(raw.pending_jobs ?? 0),
+    totalMechanics: Number(raw.total_mechanics ?? 0),
+    verifiedMechanics: Number(raw.verified_mechanics ?? 0),
+    revenueCollected: Number(raw.revenue_collected_ugx ?? 0),
+    pendingCollections: Number(raw.pending_collections_ugx ?? 0),
+  };
 };
 
 export const fetchRevenueChart = async (days: number = 30): Promise<RevenueData[]> => {
-  // Fetch directly from the requests service /revenue/ endpoint
-  try {
-    const resp = await requestsClient.get('/revenue/', { params: { days } });
-    const raw = resp.data;
-    if (!Array.isArray(raw)) return [];
-    return raw.map((item: any) => ({ date: item.date || '', amount: Number(item.amount || 0) }));
-  } catch (err) {
-    console.warn('fetchRevenueChart: failed to fetch revenue chart', err);
-    return [];
-  }
+  const raw = await fetchWithAuth<any[]>(`/admin/dashboard/revenue-chart?limit=${days}`);
+  return raw.map((item) => ({ date: item.date || '', amount: Number(item.amount || 0) }));
 };
 
 // Service Requests
@@ -329,7 +264,7 @@ export interface MechanicsParams {
 }
 
 export const fetchMechanics = async (params: MechanicsParams) => {
-  const resp = await mechanicsClient.get('/admin/mechanics', {
+  const resp = await authClient.get('/auth/admin/mechanics', {
     params: {
       page: params.page ?? 1,
       pageSize: params.pageSize ?? 10,
@@ -379,22 +314,23 @@ export interface UpdateMechanicData {
 }
 
 export const createMechanic = async (data: CreateMechanicData) => {
-  const resp = await mechanicsClient.post('/admin/mechanics', {
-    name: data.full_name,
+  const resp = await authClient.post('/auth/admin/create-provider', {
+    full_name: data.full_name,
     phone: data.phone,
     location: data.location || '',
-    is_verified: false,
+    specialty: data.specialty || 'General Repair',
+    provider_type: 'mechanic',
   });
   return resp.data;
 };
 
 export const updateMechanic = async (id: string, data: UpdateMechanicData) => {
-  const resp = await mechanicsClient.patch(`/admin/mechanics/${id}`, data);
+  const resp = await authClient.patch(`/auth/admin/mechanics/${id}`, data);
   return resp.data;
 };
 
 export const deleteMechanic = async (id: string, reason: string) => {
-  const resp = await mechanicsClient.delete(`/admin/mechanics/${id}`, { data: { reason } });
+  const resp = await authClient.delete(`/auth/admin/mechanics/${id}`, { data: { reason } });
   return resp.data;
 };
 
@@ -415,7 +351,7 @@ export interface TowingProvider {
 }
 
 export const fetchTowingProviders = async (params: MechanicsParams) => {
-  const resp = await mechanicsClient.get('/admin/towing-providers', {
+  const resp = await authClient.get('/auth/admin/towing-providers', {
     params: {
       page: params.page ?? 1,
       pageSize: params.pageSize ?? 10,
@@ -448,12 +384,12 @@ export const fetchTowingProviders = async (params: MechanicsParams) => {
 };
 
 export const updateTowingProvider = async (id: string, data: Partial<{ name: string; phone: string; location: string; is_verified: boolean }>) => {
-  const resp = await mechanicsClient.patch(`/admin/towing-providers/${id}`, data);
+  const resp = await authClient.patch(`/auth/admin/towing-providers/${id}`, data);
   return resp.data;
 };
 
 export const deleteTowingProvider = async (id: string, reason: string) => {
-  const resp = await mechanicsClient.delete(`/admin/towing-providers/${id}`, { data: { reason } });
+  const resp = await authClient.delete(`/auth/admin/towing-providers/${id}`, { data: { reason } });
   return resp.data;
 };
 
@@ -525,9 +461,9 @@ export const resetProviderCredentials = async (
 export interface LiveStats {
   activeRequests: number;
   stuckRequests: number;
-  requestsToday: number;
-  completedToday: number;
-  completionRateToday: number;
+  requestsCreatedToday: number;
+  completedRequestsCreatedToday: number;
+  completionRateCreatedToday: number;
   towingOnline: number;
   mechanicsOnline: number;
   asOf: string;
@@ -538,9 +474,9 @@ export const fetchLiveStats = async (): Promise<LiveStats> => {
   return {
     activeRequests: raw.active_requests ?? 0,
     stuckRequests: raw.stuck_requests ?? 0,
-    requestsToday: raw.requests_today ?? 0,
-    completedToday: raw.completed_today ?? 0,
-    completionRateToday: raw.completion_rate_today ?? 0,
+    requestsCreatedToday: raw.requests_today ?? 0,
+    completedRequestsCreatedToday: raw.completed_requests_created_today ?? 0,
+    completionRateCreatedToday: raw.completion_rate_created_today ?? 0,
     towingOnline: raw.towing_online ?? 0,
     mechanicsOnline: raw.mechanics_online ?? 0,
     asOf: raw.as_of ?? new Date().toISOString(),
@@ -636,14 +572,13 @@ export interface Payment {
   mechanicPayout: number;
   method: string;            // how they paid: 'mtn' | 'airtel' | 'cash' | 'momo'
   task: string;              // the service/task the payment was for
-  collectionStatus: 'pending' | 'initiated' | 'success' | 'failed' | 'successful' | 'cash';
-  disbursementStatus: 'pending' | 'initiated' | 'success' | 'failed';
+  collectionStatus: 'success' | 'pending' | 'failed' | 'initiated' | 'cash' | 'cancelled' | 'unknown';
+  disbursementStatus: 'success' | 'pending' | 'failed' | 'initiated' | 'cancelled' | 'unknown';
 }
 
 export interface PaymentStats {
   totalCollected: number;
   totalTransactions: number;
-  commissionEarned: number;
   pendingCollections: number;
 }
 
@@ -699,7 +634,6 @@ export const fetchPaymentStats = async (): Promise<PaymentStats> => {
   return {
     totalCollected:     stats.revenue_collected_ugx   ?? 0,
     totalTransactions:  stats.total_transactions       ?? 0,
-    commissionEarned:   stats.commission_earned_ugx    ?? 0,
     pendingCollections: stats.pending_collections_ugx  ?? 0,
   };
 };

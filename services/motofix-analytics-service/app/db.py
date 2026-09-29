@@ -28,43 +28,46 @@ auth_db_error: str | None = None
 async def _bootstrap_tables(pool: asyncpg.Pool) -> None:
     """Create analytics-owned tables on the requests DB."""
     async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS subscriptions (
-                id                   SERIAL PRIMARY KEY,
-                mechanic_id          INTEGER NOT NULL,
-                mechanic_phone       TEXT NOT NULL,
-                plan                 TEXT NOT NULL DEFAULT 'monthly',
-                status               TEXT NOT NULL DEFAULT 'trial',
-                amount_ugx           INTEGER NOT NULL DEFAULT 20000,
-                trial_ends_at        TIMESTAMPTZ,
-                current_period_start TIMESTAMPTZ,
-                current_period_end   TIMESTAMPTZ,
-                grace_ends_at        TIMESTAMPTZ,
-                payment_ref          TEXT,
-                payment_method       TEXT,
-                created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE (mechanic_id)
+        if os.getenv("ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS", "").lower() == "true":
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    id                   SERIAL PRIMARY KEY,
+                    mechanic_id          INTEGER NOT NULL,
+                    mechanic_phone       TEXT NOT NULL,
+                    plan                 TEXT NOT NULL DEFAULT 'monthly',
+                    status               TEXT NOT NULL DEFAULT 'trial',
+                    amount_ugx           INTEGER NOT NULL DEFAULT 20000,
+                    trial_ends_at        TIMESTAMPTZ,
+                    current_period_start TIMESTAMPTZ,
+                    current_period_end   TIMESTAMPTZ,
+                    grace_ends_at        TIMESTAMPTZ,
+                    payment_ref          TEXT,
+                    payment_method       TEXT,
+                    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (mechanic_id)
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_subs_status ON subscriptions (status)"
             )
-        """)
-        await conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_subs_status ON subscriptions (status)"
-        )
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS subscription_payments (
-                id             SERIAL PRIMARY KEY,
-                mechanic_id    INTEGER NOT NULL,
-                mechanic_phone TEXT NOT NULL,
-                amount_ugx     INTEGER NOT NULL,
-                payment_method TEXT NOT NULL DEFAULT 'bank_transfer',
-                payment_ref    TEXT,
-                period_start   TIMESTAMPTZ,
-                period_end     TIMESTAMPTZ,
-                recorded_by    TEXT,
-                created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-        """)
-    logger.info("✅ Analytics tables bootstrapped (subscriptions, subscription_payments)")
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS subscription_payments (
+                    id             SERIAL PRIMARY KEY,
+                    mechanic_id    INTEGER NOT NULL,
+                    mechanic_phone TEXT NOT NULL,
+                    amount_ugx     INTEGER NOT NULL,
+                    payment_method TEXT NOT NULL DEFAULT 'bank_transfer',
+                    payment_ref    TEXT,
+                    period_start   TIMESTAMPTZ,
+                    period_end     TIMESTAMPTZ,
+                    recorded_by    TEXT,
+                    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            logger.info("✅ Analytics tables bootstrapped (subscriptions, subscription_payments)")
+        else:
+            logger.info("ℹ️ Legacy subscription tables disabled by default; set ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS=true to enable them.")
 
 
 # ── Pool initialisation ───────────────────────────────────────────────────────

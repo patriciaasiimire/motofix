@@ -5,11 +5,33 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { MapPin, Navigation } from 'lucide-react';
+import { authService, requestsService } from '@/config/api';
+import { useAuth } from '@/hooks/useAuth';
 
 const SOS  = '#F59E0B';
 const SOSD = '#D97706';
 
 const GPS_FALLBACK = { lat: 0.3476, lng: 32.5825 };
+const LAST_PIN_KEY = 'motofix_last_pin';
+
+type LastPin = { lat: number; lng: number };
+
+function readStoredPin(): LastPin | null {
+  try {
+    const raw = localStorage.getItem(LAST_PIN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LastPin;
+    if (typeof parsed?.lat !== 'number' || typeof parsed?.lng !== 'number') return null;
+    if (!Number.isFinite(parsed.lat) || !Number.isFinite(parsed.lng)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function persistPin(lat: number, lng: number) {
+  try { localStorage.setItem(LAST_PIN_KEY, JSON.stringify({ lat, lng, saved_at: Date.now() })); } catch { /* ignore */ }
+}
 
 const LOC_MESSAGES = [
   'Initialising GPS signal…',
@@ -87,27 +109,47 @@ function LocatingSpinner() {
 /* ── Main page ───────────────────────────────────────────────────────────── */
 export default function LocatingUser() {
   const navigate   = useNavigate();
-  const routeState = useLocation().state as { issueType?: string; serviceType?: string; aiSummary?: string; aiDiagnosis?: unknown; mode?: string; breakdownPrefs?: { fixOnSpot: boolean; allowTow: boolean } } | null;
+  const { user }   = useAuth();
+  const routeState = useLocation().state as {
+    issueType?: string;
+    serviceType?: string;
+    aiSummary?: string;
+    aiDiagnosis?: unknown;
+    mode?: string;
+    breakdownPrefs?: { fixOnSpot: boolean; allowTow: boolean };
+    reRequestServiceType?: string;
+    reRequestDescription?: string;
+    reRequestId?: string;
+    skipTriage?: boolean;
+    lastPin?: LastPin;
+  } | null;
   const issueType  = routeState?.issueType;
   const isSpareParts = routeState?.mode === 'spare-parts';
+  const skipTriage = !!routeState?.skipTriage;
+  const lastPin = useRef(routeState?.lastPin ?? readStoredPin()).current;
   const submitDone = useRef(false);
 
   // Mode-specific copy (same flow + animation as the mechanic/towing options).
-  const badgeText  = isSpareParts ? 'Spare Parts & Self-Fix'       : 'SOS — Emergency Assistance';
+  const badgeText  = isSpareParts ? 'Spare Parts & Self-Fix' : skipTriage ? 'Get help again' : 'SOS — Emergency Assistance';
   const subtitle   = isSpareParts
     ? 'To show spare-parts dealers near you, MOTOFIX needs your GPS location. It’s only used to find nearby shops.'
-    : "To send a mechanic to you, MOTOFIX needs your GPS location. It's only used while you need help.";
+    : 'To send on-site assist or a tow to you, MOTOFIX needs your GPS location. It’s only used while you need help.';
   const secureNote = isSpareParts
     ? 'Your location is only used to find nearby dealers.'
-    : 'Your location is sent securely to the nearest mechanic only.';
+    : 'Your location is sent securely to the matched helper only.';
   const btnText    = isSpareParts ? 'Allow Location & Find Dealers' : 'Allow Location & Get Help';
-  const locatedSub = isSpareParts ? 'Finding dealers near you…'     : 'Preparing your request details…';
+  const locatedSub = isSpareParts
+    ? 'Finding dealers near you…'
+    : skipTriage
+      ? 'Matching a verified helper…'
+      : 'Preparing your request details…';
   const MESSAGES   = isSpareParts ? SPARE_PARTS_MESSAGES : LOC_MESSAGES;
 
   const [phase,      setPhase]      = useState<Phase>('permission');
   const [msgIdx,     setMsgIdx]     = useState(0);
   const [address,    setAddress]    = useState('');
   const [locError,   setLocError]   = useState('');
+  const [dispatchError, setDispatchError] = useState('');
 
   const gpsDone       = useRef(false);
   const minTimeDone   = useRef(false);
@@ -149,6 +191,7 @@ export default function LocatingUser() {
 
     const onGot = (lat: number, lng: number, accuracy?: number) => {
       pendingCoords.current = { lat, lng, accuracy };
+      persistPin(lat, lng);
       gpsDone.current = true;
       tryComplete();
       doGeocode(lat, lng, addr => {
@@ -158,7 +201,7 @@ export default function LocatingUser() {
     };
 
     if (!navigator.geolocation) {
-      setLocError('GPS is not supported on this browser.');
+      setLocError(lastPin ? 'gps-unavailable' : 'GPS is not supported on this browser.');
       setPhase('permission');
       return;
     }
@@ -166,7 +209,9 @@ export default function LocatingUser() {
       pos => onGot(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy),
       (err) => {
         // PERMISSION_DENIED = 1, POSITION_UNAVAILABLE = 2, TIMEOUT = 3
-        if (err.code === 1) {
+        if (lastPin) {
+          setLocError('gps-unavailable');
+        } else if (err.code === 1) {
           setLocError('denied');
         } else {
           setLocError('Could not get your location. Make sure GPS is on and try again.');
@@ -175,7 +220,24 @@ export default function LocatingUser() {
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
     );
-  }, [doGeocode, tryComplete]);
+  }, [doGeocode, tryComplete, lastPin]);
+
+  const useLastPin = useCallback(() => {
+    if (!lastPin) return;
+    setLocError('');
+    setDispatchError('');
+    gpsDone.current = false;
+    minTimeDone.current = false;
+    pendingCoords.current = { lat: lastPin.lat, lng: lastPin.lng };
+    persistPin(lastPin.lat, lastPin.lng);
+    setPhase('locating');
+    gpsDone.current = true;
+    doGeocode(lastPin.lat, lastPin.lng, addr => {
+      pendingAddr.current = addr;
+      setAddress(addr);
+    });
+    tryComplete();
+  }, [lastPin, doGeocode, tryComplete]);
 
   /* Watch for the user granting permission after initially denying it */
   useEffect(() => {
@@ -204,7 +266,7 @@ export default function LocatingUser() {
   useEffect(() => {
     if (phase !== 'located' || submitDone.current) return;
     submitDone.current = true;
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       if (isSpareParts) {
         navigate('/spare-parts', {
           replace: true,
@@ -216,6 +278,38 @@ export default function LocatingUser() {
         });
         return;
       }
+      if (skipTriage) {
+        const isTow = /tow|recovery/i.test(routeState?.reRequestServiceType ?? '') || issueType === 'towing';
+        const svcType = isTow ? 'Tow / recovery' : 'Roadside assist';
+        const notes = (routeState?.reRequestDescription || '').trim();
+        const description = notes
+          || (isTow
+            ? 'Repeat request — tow / recovery to a garage or safer place.'
+            : 'Repeat request — on-site assist.');
+        try {
+          let preferredMechanicId: number | undefined;
+          try {
+            const { data } = await authService.getPreferences();
+            const savedId = Number(data?.preferences?.preferred_mechanic_id);
+            if (Number.isSafeInteger(savedId) && savedId > 0) preferredMechanicId = savedId;
+          } catch { /* matching still runs without a preferred helper */ }
+          const loc = `${pendingCoords.current.lat},${pendingCoords.current.lng}`;
+          const res = await requestsService.create({
+            customer_name: user?.full_name || 'Driver',
+            service_type: svcType,
+            location: loc,
+            description,
+            ...(preferredMechanicId ? { preferred_mechanic_id: preferredMechanicId } : {}),
+          });
+          const newId = String(res.data?.id ?? '');
+          navigate(newId ? `/requests/${newId}` : '/requests', { replace: true });
+        } catch {
+          submitDone.current = false;
+          setDispatchError('Could not dispatch help. Check your connection and try again.');
+          setPhase('permission');
+        }
+        return;
+      }
       navigate('/describe-issue', {
         replace: true,
         state: {
@@ -224,15 +318,18 @@ export default function LocatingUser() {
           breakdownPrefs: routeState?.breakdownPrefs,
           aiSummary:   routeState?.aiSummary,
           aiDiagnosis: routeState?.aiDiagnosis,
+          reRequestServiceType: routeState?.reRequestServiceType,
+          reRequestDescription: routeState?.reRequestDescription,
+          reRequestId: routeState?.reRequestId,
           lat:      pendingCoords.current.lat,
           lng:      pendingCoords.current.lng,
           accuracy: pendingCoords.current.accuracy,
           address:  pendingAddr.current,
         },
       });
-    }, 2200);
+    }, skipTriage ? 900 : 2200);
     return () => clearTimeout(t);
-  }, [phase, navigate, issueType, routeState, isSpareParts]);
+  }, [phase, navigate, issueType, routeState, isSpareParts, skipTriage, user?.full_name]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, overflow: 'hidden', background: 'var(--page-bg)' }}>
@@ -281,7 +378,7 @@ export default function LocatingUser() {
             </div>
 
             {/* Location error message */}
-            {locError && (
+            {(locError || dispatchError) && (
               <div style={{
                 width: '100%', borderRadius: 12, padding: '12px 16px',
                 display: 'flex', alignItems: 'flex-start', gap: 10,
@@ -290,15 +387,29 @@ export default function LocatingUser() {
                 <span style={{ fontSize: 16, flexShrink: 0 }}>⚠️</span>
                 <div>
                   <p style={{ fontSize: 12, color: SOS, fontWeight: 600, lineHeight: 1.5 }}>
-                    {locError === 'denied' ? 'Location access was denied.' : locError}
+                    {dispatchError
+                      || (locError === 'denied' ? 'Location access was denied.'
+                        : locError === 'gps-unavailable' ? 'GPS is unavailable. Use your last pin to continue?'
+                          : locError)}
                   </p>
-                  {locError === 'denied' && (
+                  {locError === 'denied' && !lastPin && (
                     <p style={{ fontSize: 11, color: SOS, fontWeight: 400, lineHeight: 1.6, marginTop: 4, opacity: 0.85 }}>
                       On iPhone: go to <strong>Settings → Safari → Location</strong> and set it to <strong>Ask</strong>. Then come back and tap the button — it will work automatically.
                     </p>
                   )}
                 </div>
               </div>
+            )}
+            {locError === 'gps-unavailable' && lastPin && (
+              <button
+                onClick={useLastPin}
+                style={{
+                  width: '100%', height: 48, borderRadius: 14, border: `1.5px solid ${SOS}77`,
+                  background: `${SOS}18`, color: SOS, fontWeight: 800, fontSize: 13.5, cursor: 'pointer',
+                }}
+              >
+                Use last location
+              </button>
             )}
 
             <div style={{
@@ -442,7 +553,7 @@ export default function LocatingUser() {
             </div>
           )}
           <p style={{ fontSize: 11, color: 'var(--text-dim)', animation: 'slide-up 0.5s ease 1.1s both', opacity: 0 }}>
-            Opening issue details…
+            {skipTriage ? 'Matching help…' : 'Opening issue details…'}
           </p>
           <div style={{ width: 120, height: 2, borderRadius: 2, overflow: 'hidden', background: `${SOS}22`, animation: 'slide-up 0.5s ease 1.25s both', opacity: 0 }}>
             <div style={{ height: '100%', borderRadius: 2, background: SOS, animation: 'progress-bar 2s linear 1.3s both' }} />

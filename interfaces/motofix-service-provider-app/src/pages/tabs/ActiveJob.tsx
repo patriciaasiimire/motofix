@@ -795,8 +795,10 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
     in_progress: { label: '✅ Service Provided – Done', next: 'awaiting_confirmation' },
   }
   const action = actionConfig[status]
-  // Breakdown Rescue jobs resolve on-site as either a repair or a tow.
-  const isBreakdown = /breakdown/i.test(`${activeRequest.issue_type ?? ''} ${activeRequest.service_type ?? ''}`)
+  // Roadside assist is triage/first aid; explicit tow jobs are completed after delivery.
+  const jobTypeText = `${activeRequest.issue_type ?? ''} ${activeRequest.service_type ?? ''}`.toLowerCase()
+  const isTowJob = /tow|recovery/.test(jobTypeText)
+  const isRoadsideAssist = !isTowJob && /roadside assist|breakdown/.test(jobTypeText)
   // Specific "in progress" wording for the job-progress card — no generic "repair / refuel".
   const _issueLabel = activeRequest.issue_type ?? activeRequest.service_type ?? ''
   const _svcText = `${activeRequest.issue_type ?? ''} ${activeRequest.service_type ?? ''}`.toLowerCase()
@@ -805,7 +807,7 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
     /tow/.test(_svcText)  ? 'Towing your vehicle to safety' :
     _issueLabel           ? `Working on your ${_issueLabel.toLowerCase()}` :
     'Service work is underway'
-  const needOutcome = isBreakdown && status === 'in_progress' && !bdOutcome
+  const needOutcome = isRoadsideAssist && status === 'in_progress' && !bdOutcome
   const isAwaitingConfirmation = status === 'awaiting_confirmation'
   // Who started the completion handshake. If the DRIVER (or the system) did, the
   // mechanic is the one who needs to confirm; otherwise the mechanic is waiting.
@@ -1244,18 +1246,18 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
           )}
 
           {/* Breakdown Rescue — resolve on-site as a repair or a tow */}
-          {isBreakdown && status === 'in_progress' && (
+          {isRoadsideAssist && status === 'in_progress' && (
             <div style={{ marginBottom: 12, padding: 14, borderRadius: 14, background: 'rgba(251,146,60,0.10)', border: '1px solid rgba(251,146,60,0.35)' }}>
               <p style={{ fontSize: 12.5, fontWeight: 800, color: C.textHi, marginBottom: 4 }}>Breakdown outcome</p>
-              <p style={{ fontSize: 11.5, color: C.textFaint, marginBottom: 10, lineHeight: 1.5 }}>Could you fix it on the spot, or does it need towing?</p>
+              <p style={{ fontSize: 11.5, color: C.textFaint, marginBottom: 10, lineHeight: 1.5 }}>Could you assist on site, or does it need a tow to a garage?</p>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button
-                  onClick={() => { setBdOutcome('fixed'); sendMessage({ type: 'chat_message', service_request_id: String(activeRequest.id), message: '✅ Good news — I fixed your vehicle on the spot.', sender_id: 'system' }) }}
+                  onClick={() => { setBdOutcome('fixed'); sendMessage({ type: 'chat_message', service_request_id: String(activeRequest.id), message: '✅ On-site assist is done — the vehicle should be able to continue.', sender_id: 'system' }) }}
                   style={{ flex: 1, padding: '11px 0', borderRadius: 12, cursor: 'pointer', fontSize: 13, fontWeight: 800, border: bdOutcome === 'fixed' ? `2px solid ${C.green}` : '1px solid rgba(255,255,255,0.15)', background: bdOutcome === 'fixed' ? 'rgba(34,197,94,0.16)' : C.surface3, color: bdOutcome === 'fixed' ? C.green : C.textMuted }}>
                   🔧 Fixed on-site
                 </button>
                 <button
-                  onClick={() => { setBdOutcome('towing'); sendMessage({ type: 'chat_message', service_request_id: String(activeRequest.id), message: '🚛 It cannot be fixed here — I will tow your vehicle to a garage.', sender_id: 'system' }) }}
+                  onClick={() => { setBdOutcome('towing'); sendMessage({ type: 'chat_message', service_request_id: String(activeRequest.id), message: '🚛 It needs a tow to a garage — I will recover the vehicle.', sender_id: 'system' }) }}
                   style={{ flex: 1, padding: '11px 0', borderRadius: 12, cursor: 'pointer', fontSize: 13, fontWeight: 800, border: bdOutcome === 'towing' ? `2px solid ${C.amber}` : '1px solid rgba(255,255,255,0.15)', background: bdOutcome === 'towing' ? 'rgba(251,146,60,0.18)' : C.surface3, color: bdOutcome === 'towing' ? C.amber : C.textMuted }}>
                   🚛 Needs towing
                 </button>

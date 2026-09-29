@@ -1,5 +1,4 @@
-// Payments.tsx — the admin view of money moving through the platform: a table of payment
-// transactions plus summary stats (collected, paid out, etc.).
+// Payments.tsx — job-level payment records with summary figures from the platform-fee ledger.
 
 import { useState, useMemo } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
@@ -37,19 +36,38 @@ const TIME_HOURS: Record<TimeFilter, [number, number]> = {
 
 // ── Status badge ───────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
+  const normalized = String(status ?? '').trim().toLowerCase();
   const variants: Record<string, 'completed' | 'pending' | 'failed' | 'default'> = {
-    success: 'completed', pending: 'pending', failed: 'failed', initiated: 'default',
+    success: 'completed',
+    successful: 'completed',
+    cash: 'completed',
+    pending: 'pending',
+    initiated: 'default',
+    failed: 'failed',
+    cancelled: 'failed',
+    unknown: 'default',
+    rejected: 'failed',
+    declined: 'failed',
   };
   const labels: Record<string, string> = {
-    success: 'Success', pending: 'Pending', failed: 'Failed', initiated: 'Initiated',
+    success: 'Success',
+    successful: 'Successful',
+    cash: 'Cash',
+    pending: 'Pending',
+    initiated: 'Initiated',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+    unknown: 'Unknown',
+    rejected: 'Rejected',
+    declined: 'Declined',
   };
-  return <Badge variant={variants[status] ?? 'default'}>{labels[status] ?? status}</Badge>;
+  return <Badge variant={variants[normalized] ?? 'default'}>{(labels[normalized] ?? normalized) || 'Unknown'}</Badge>;
 }
 
 // Status dot colors for dropdowns
 const STATUS_DOTS: Record<string, string> = {
   pending: 'bg-amber-500', initiated: 'bg-blue-500',
-  success: 'bg-green-500', failed: 'bg-red-500',
+  success: 'bg-green-500', cash: 'bg-green-500', failed: 'bg-red-500', cancelled: 'bg-red-500',
 };
 
 // ── Columns ────────────────────────────────────────────────────────
@@ -156,7 +174,7 @@ export default function Payments() {
   const [timeFilter, setTimeFilter]       = useState<TimeFilter>('all');
   const [page, setPage]                   = useState(1);
 
-  const { data: paymentsData, isLoading: paymentsLoading } = useQuery({
+  const { data: paymentsData, isLoading: paymentsLoading, error: paymentsError } = useQuery({
     queryKey: ['payments', { search, collectionStatus, disbursementStatus, page }],
     queryFn: () => fetchPayments({
       search: search || undefined,
@@ -171,7 +189,7 @@ export default function Payments() {
     gcTime:   10 * 60 * 1000,   // keep in cache 10 minutes
   });
 
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
     queryKey: ['payment-stats'],
     queryFn: fetchPaymentStats,
     placeholderData: keepPreviousData,
@@ -201,7 +219,7 @@ export default function Payments() {
     return rows;
   }, [paymentsData, dateRange, timeFilter]);
 
-  const displayStats = stats || { totalCollected: 0, totalTransactions: 0, commissionEarned: 0, pendingCollections: 0 };
+  const displayStats = stats || { totalCollected: 0, totalTransactions: 0, pendingCollections: 0 };
   const hasFilters = search !== '' || collectionStatus !== 'all' || disbursementStatus !== 'all' || !!dateRange?.from || timeFilter !== 'all';
 
   const clearAll = () => {
@@ -220,8 +238,20 @@ export default function Payments() {
     { value: 'pending',   label: 'Pending' },
     { value: 'initiated', label: 'Initiated' },
     { value: 'success',   label: 'Success' },
+    { value: 'cash',      label: 'Cash' },
     { value: 'failed',    label: 'Failed' },
+    { value: 'cancelled', label: 'Cancelled' },
   ];
+
+  if ((paymentsError && !paymentsData) || (statsError && !stats)) {
+    return (
+      <DashboardLayout>
+        <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+          Payment data is unavailable. Check the dispatch and analytics database services, then refresh.
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -230,13 +260,13 @@ export default function Payments() {
         {/* Header */}
         <div>
           <h1 className="text-2xl lg:text-3xl font-bold">Payments & Transactions</h1>
-          <p className="text-sm text-foreground/70 mt-1">Platform earnings from service commissions and subscription fees.</p>
+          <p className="text-sm text-foreground/70 mt-1">Job-level payment and quote records. Platform revenue is tracked separately in platform_fees.</p>
         </div>
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <ChipCard
-            title="Total Transactions"
+            title="Job Payment Records"
             value={displayStats.totalTransactions.toLocaleString()}
             icon={<Receipt size={18} />}
             iconColor="var(--adm-muted)"
@@ -247,13 +277,6 @@ export default function Payments() {
             value={formatUGX(displayStats.totalCollected)}
             icon={<TrendingUp size={18} />}
             iconColor="var(--adm-green)"
-            isLoading={statsLoading}
-          />
-          <ChipCard
-            title="Commission Earned"
-            value={formatUGX(displayStats.commissionEarned)}
-            icon={<Wallet size={18} />}
-            iconColor="var(--adm-cyan)"
             isLoading={statsLoading}
           />
           <ChipCard

@@ -369,16 +369,24 @@ export default function FaultChat() {
   }
 
   // Hand off to the current request flow (same as Home): /locating → /describe-issue.
-  function goToLocating(issueType: string) {
+  function goToLocating(issueType: string, triage?: DiagnosisResult | null) {
     const serviceType = issueType === 'towing' ? 'towing_provider' : issueType === 'breakdown' ? 'both' : 'mechanic';
     const breakdownPrefs = issueType === 'breakdown' ? { fixOnSpot: true, allowTow: true } : undefined;
-    navigate('/locating', { state: { issueType, serviceType, breakdownPrefs } });
+    navigate('/locating', {
+      state: {
+        issueType,
+        serviceType,
+        breakdownPrefs,
+        aiSummary: triage?.fault_description,
+        aiDiagnosis: triage ?? undefined,
+      },
+    });
   }
 
   function shareLocation() {
     pushUser('📍 Share my location');
     setStep('idle');
-    goToLocating(guidedIssueKey);
+    goToLocating(guidedIssueKey, diagnosis);
   }
 
   function declineLocation() {
@@ -570,7 +578,7 @@ export default function FaultChat() {
     const issueType = diagnosis
       ? faultCategoryToIssueType(diagnosis.fault_category, diagnosis.provider_type)
       : 'other';
-    goToLocating(issueType);
+    goToLocating(issueType, diagnosis);
   }
 
   const guidedOptions: { label: string; onPick: () => void }[] =

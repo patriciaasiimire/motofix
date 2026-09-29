@@ -111,6 +111,9 @@ CREATE TABLE IF NOT EXISTS payments (
 @app.on_event("startup")
 async def startup():
     global db_pool
+    if not SECRET_KEY:
+        logger.critical("Missing required SECRET_KEY environment variable for motofix-payments-service")
+        raise RuntimeError("SECRET_KEY environment variable is required before motofix-payments-service startup")
     logger.info("Connecting to PostgreSQL…")
     db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
     async with db_pool.acquire() as conn:
@@ -592,5 +595,6 @@ async def health():
     return {
         "status": "ok",
         "service": "motofix-payments-service",
+        "jwt_secret_configured": bool(SECRET_KEY),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

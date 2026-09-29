@@ -156,8 +156,9 @@ export default function Jobs({
         : undefined,
     }))
     .filter(({ job }) => {
-      if (typeFilter === 'repair') return (job.service_type ?? '').toLowerCase() !== 'towing'
-      if (typeFilter === 'towing') return (job.service_type ?? '').toLowerCase() === 'towing'
+      const isTowJob = /tow|recovery/i.test(job.service_type ?? '')
+      if (typeFilter === 'repair') return !isTowJob
+      if (typeFilter === 'towing') return isTowJob
       return true
     })
     .sort((a, b) =>
@@ -307,7 +308,7 @@ export default function Jobs({
             {/* Type filter + sort */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 8 }}>
               <div style={{ display: 'flex', gap: 6 }}>
-                {([['all', 'All'], ['repair', 'Repairs'], ['towing', 'Towing']] as const).map(([val, label]) => (
+                {([['all', 'All'], ['repair', 'Roadside assist'], ['towing', 'Tow / recovery']] as const).map(([val, label]) => (
                   <button
                     key={val}
                     className="jobs-filter-pill"

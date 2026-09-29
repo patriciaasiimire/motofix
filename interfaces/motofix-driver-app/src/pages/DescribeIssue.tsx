@@ -6,7 +6,7 @@
 import { useState, useLayoutEffect, useEffect, useRef, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { ArrowLeft, MapPin, Send, Sparkles } from 'lucide-react'
-import { requestsService, diagnosisService, partsService, type DiagnosisResult } from '@/config/api'
+import { authService, requestsService, diagnosisService, partsService, type DiagnosisResult } from '@/config/api'
 import { useAuth } from '@/hooks/useAuth'
 
 /* ── Admin catalog override ───────────────────────────────────────────────────
@@ -93,8 +93,8 @@ const ISSUE_LABELS: Record<string, string> = {
   engine:    'Engine Fault',
   battery:   'Dead Battery',
   fuel:      'Out of Fuel',
-  towing:    'Need Towing',
-  breakdown: 'Breakdown Rescue',
+  towing:    'Tow / recovery',
+  breakdown: 'Roadside assist or tow',
   other:     'Other Issue',
 }
 
@@ -103,8 +103,8 @@ const ISSUE_DEFAULTS: Record<string, string> = {
   engine:    'Engine issue – needs mechanic',
   battery:   'Battery problem – needs jump start or replacement',
   fuel:      'Out of fuel – needs fuel delivery',
-  towing:    'Vehicle needs towing',
-  breakdown: 'Vehicle has broken down — may need on-site repair or towing',
+  towing:    'Vehicle needs tow / recovery to a garage or safer place',
+  breakdown: 'Vehicle needs roadside triage; if it is unsafe or too complex to fix, request a tow to a garage',
   other:     'Needs roadside assistance',
 }
 
@@ -114,7 +114,10 @@ interface RouteState {
   serviceType?: string
   breakdownPrefs?: { fixOnSpot: boolean; allowTow: boolean }
   aiSummary?:   string
-  aiDiagnosis?: { severity?: string; fault_category?: string } | null
+  aiDiagnosis?: { severity?: string; fault_category?: string; provider_type?: string } | null
+  reRequestServiceType?: string
+  reRequestDescription?: string
+  reRequestId?: string
   lat?:         number
   lng?:         number
   accuracy?:    number
@@ -125,9 +128,9 @@ interface RouteState {
 type DispatchPhase = 'idle' | 'finding_garage' | 'searching' | 'found' | 'dispatched'
 
 const DISPATCH_MSGS: Record<Exclude<DispatchPhase, 'idle'>, { title: string; sub: string }> = {
-  finding_garage: { title: 'Finding the Garage', sub: 'Locating the garage you specified…' },
+  finding_garage: { title: 'Finding Tow Destination', sub: 'Locating the garage you specified…' },
   searching:  { title: 'Searching Nearby',   sub: 'Finding available service providers in your area…' },
-  found:      { title: 'Providers Found!',   sub: 'Alerting mechanics near your location…' },
+  found:      { title: 'Providers Found!',   sub: 'Alerting nearby verified providers…' },
   dispatched: { title: 'Request Dispatched!', sub: 'A provider will confirm shortly. Stand by.' },
 }
 
@@ -302,7 +305,6 @@ export default function DescribeIssue() {
 
   const issueType  = routeState?.issueType
   const breakdownPrefs = routeState?.breakdownPrefs
-  const showTowDest = issueType === 'breakdown' && (breakdownPrefs?.allowTow ?? true)
 
   const aiSummary  = routeState?.aiSummary
   const lat        = routeState?.lat
@@ -313,7 +315,7 @@ export default function DescribeIssue() {
   // Draft persistence — iOS Safari evicts/reloads backgrounded tabs (memory pressure),
   // which wipes in-memory React state. Persist the in-progress request to sessionStorage
   // (survives the tab reload) and restore it on mount so nothing typed is lost.
-  const DRAFT_KEY = `motofix_describe_draft_${issueType ?? 'general'}`
+  const DRAFT_KEY = `motofix_describe_draft_${issueType ?? 'general'}_${routeState?.reRequestId ?? 'new'}`
   const PHOTO_KEY = `${DRAFT_KEY}_photo`
   const draft0 = (() => { try { return JSON.parse(sessionStorage.getItem(DRAFT_KEY) || '{}') } catch { return {} } })() as Partial<{ description: string; towChoice: 'find' | 'own'; garageName: string; garageArea: string; garagePhone: string }>
   // Photo + its analysis persisted alongside the text draft (separate key — it's large).
@@ -322,7 +324,7 @@ export default function DescribeIssue() {
     try { return JSON.parse(sessionStorage.getItem(PHOTO_KEY) || 'null') as { dataUrl: string; estimate: DiagnosisResult; hash: string } | null } catch { return null }
   }, [PHOTO_KEY])
 
-  const [description,    setDescription]    = useState(draft0.description ?? '')
+  const [description,    setDescription]    = useState(draft0.description ?? routeState?.reRequestDescription ?? '')
   const [dispatchPhase,  setDispatchPhase]  = useState<DispatchPhase>('idle')
   const [submitError,    setSubmitError]    = useState('')
   const [towChoice,      setTowChoice]      = useState<'find' | 'own'>(draft0.towChoice ?? 'find')
@@ -340,6 +342,32 @@ export default function DescribeIssue() {
   const [photoMismatch,   setPhotoMismatch]   = useState('')  // photo doesn't match the reported issue → flag, hide price
   const lastPhotoHashRef = useRef<string | null>(savedPhoto?.hash ?? null)
   const [displayAddress, setDisplayAddress] = useState<string | null>(null)
+  const [preferredMechanicId, setPreferredMechanicId] = useState<number | undefined>()
+
+  const towRecommended = routeState?.aiDiagnosis?.provider_type === 'towing_provider'
+    || estimate?.provider_type === 'towing_provider'
+    || ['high', 'critical'].includes(String(routeState?.aiDiagnosis?.severity ?? estimate?.severity ?? '').toLowerCase())
+  const showTowDest = issueType === 'breakdown' && ((breakdownPrefs?.allowTow ?? true) || towRecommended)
+  const requestedTow = routeState?.reRequestServiceType
+    ? /tow|recovery/i.test(routeState.reRequestServiceType)
+    : issueType === 'towing'
+      || (issueType === 'breakdown' && (
+        (breakdownPrefs?.fixOnSpot === false)
+        || (showTowDest && towChoice === 'own')
+        || (towRecommended && breakdownPrefs?.allowTow !== false)
+      ))
+  const jobTypeLabel = routeState?.reRequestServiceType
+    ? (requestedTow ? 'Tow / recovery' : 'Roadside assist')
+    : requestedTow ? 'Tow / recovery' : 'Roadside assist'
+
+  useEffect(() => {
+    authService.getPreferences()
+      .then(({ data }) => {
+        const savedId = Number(data?.preferences?.preferred_mechanic_id)
+        if (Number.isSafeInteger(savedId) && savedId > 0) setPreferredMechanicId(savedId)
+      })
+      .catch(() => {})
+  }, [])
 
   const fmtUGX = (n: number) => 'UGX ' + Math.round(n).toLocaleString()
   const rng = (a: number, b: number) => (a === b ? fmtUGX(a) : `${fmtUGX(a)} – ${fmtUGX(b)}`)
@@ -355,6 +383,7 @@ export default function DescribeIssue() {
     if (savedPhoto) return
     let cancelled = false
     const seed = (aiSummary && aiSummary.trim())
+      || routeState?.reRequestDescription?.trim()
       || `${ISSUE_LABELS[issueType ?? ''] ?? 'Vehicle issue'} — ${ISSUE_DEFAULTS[issueType ?? ''] ?? 'needs roadside assistance'}`
     setEstimateLoading(true)
     diagnosisService.diagnoseText(seed)
@@ -482,13 +511,13 @@ export default function DescribeIssue() {
       if (issueType === 'breakdown') {
         const fix = breakdownPrefs?.fixOnSpot ?? true
         const tow = breakdownPrefs?.allowTow ?? true
-        const headline = specified
-          ? 'Breakdown — tow the vehicle to a specified garage.'
-          : !fix
-            ? 'Breakdown — tow the vehicle to a nearby garage.'
-            : !tow
-              ? 'Breakdown — attempt on-site repair only (no towing).'
-              : 'Breakdown — fix on-site if possible, otherwise tow to a nearby garage.'
+        const headline = requestedTow
+          ? specified
+            ? 'Tow / recovery — take the vehicle to the specified garage.'
+            : 'Tow / recovery — take the vehicle to a garage or safer place.'
+          : !tow
+            ? 'Roadside assist — first aid and triage only; no tow requested.'
+            : 'Roadside assist — attempt a safe minor fix. If it needs a garage, request Tow / recovery in MOTOFIX.'
         const parts = [headline]
         if (specified) {
           parts.push(`Tow to garage:\n• Name: ${garageName.trim()}\n• Area: ${garageArea.trim()}\n• Phone: ${garagePhone.trim()}${garageCoords ? `\n• Map: ${garageCoords.lat.toFixed(5)},${garageCoords.lng.toFixed(5)}` : ''}`)
@@ -504,8 +533,9 @@ export default function DescribeIssue() {
       if (photoChecked && photoVerdict) {
         finalDescription += `\n\nMOTOBOT photo check: ${photoVerdict.text}${estimate?.fault_description ? ` (${estimate.fault_description})` : ''}`
       }
-      const svcType = ISSUE_LABELS[issueType ?? ''] ?? 'Other'
+      const svcType = jobTypeLabel
       const loc = lat != null && lng != null ? `${lat},${lng}` : '0,0'
+      const preferredField = preferredMechanicId ? { preferred_mechanic_id: preferredMechanicId } : {}
       let newId = ''
       if (photoFile) {
         // Send the damage photo with the request (mechanic can view it before quoting).
@@ -514,6 +544,7 @@ export default function DescribeIssue() {
         fd.append('service_type', svcType)
         fd.append('location', loc)
         fd.append('description', finalDescription)
+        if (preferredMechanicId) fd.append('preferred_mechanic_id', String(preferredMechanicId))
         fd.append('media_files', photoFile)
         const res = await requestsService.createWithMedia(fd)
         newId = String(res.data?.id ?? '')
@@ -523,6 +554,7 @@ export default function DescribeIssue() {
           service_type:  svcType,
           location:      loc,
           description:   finalDescription,
+          ...preferredField,
         })
         newId = String(res.data?.id ?? '')
       }
@@ -598,7 +630,7 @@ export default function DescribeIssue() {
             Emergency Dispatch Active
           </p>
           <p style={{ color: 'var(--text-hi)', fontWeight: 700, fontSize: 16, lineHeight: 1 }}>
-            {ISSUE_LABELS[issueType ?? ''] ?? 'Service Request'}
+            {jobTypeLabel}
           </p>
         </div>
       </div>
@@ -637,6 +669,20 @@ export default function DescribeIssue() {
                 </p>
               )}
             </div>
+          </div>
+        )}
+
+        <div style={{ borderRadius: 12, padding: '11px 13px', marginBottom: 14, background: requestedTow ? 'rgba(245,158,11,0.10)' : 'rgba(96,165,250,0.10)', border: `1px solid ${requestedTow ? `${AMBER}45` : 'rgba(96,165,250,0.32)'}` }}>
+          <p style={{ color: 'var(--text-hi)', fontSize: 12, fontWeight: 800, marginBottom: 3 }}>{jobTypeLabel}</p>
+          <p style={{ color: 'var(--text-lo)', fontSize: 11.5, lineHeight: 1.5 }}>
+            {requestedTow
+              ? 'A tow provider will take the vehicle to a garage or safer place.'
+              : 'Roadside first aid and triage. Major or unsafe repairs belong at a garage.'}
+          </p>
+        </div>
+        {towRecommended && !requestedTow && (
+          <div role="alert" style={{ borderRadius: 12, padding: '11px 13px', marginBottom: 14, background: 'rgba(245,158,11,0.10)', border: `1px solid ${AMBER}55`, color: 'var(--text-hi)', fontSize: 12, lineHeight: 1.5 }}>
+            MOTOBOT recommends a tow because this fault may be unsafe or too complex to repair on the road. You selected roadside assessment only.
           </div>
         )}
 
@@ -886,7 +932,7 @@ export default function DescribeIssue() {
             }}
           >
             <Send style={{ width: 18, height: 18, color: '#000' }} />
-            <span style={{ color: '#000', fontWeight: 800, fontSize: 15 }}>Submit Request</span>
+            <span style={{ color: '#000', fontWeight: 800, fontSize: 15 }}>Request {requestedTow ? 'Tow / recovery' : 'Roadside assist'}</span>
           </button>
 
           <button

@@ -50,6 +50,20 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def _require_secret() -> str:
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        logger.critical("Missing required SECRET_KEY environment variable for motofix-dispatch-service")
+        raise RuntimeError(
+            "Missing required SECRET_KEY environment variable for motofix-dispatch-service. "
+            "This service must fail loudly instead of accepting unsigned tokens."
+        )
+    return secret
+
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+
 # Database pool
 pool: Optional[asyncpg.Pool] = None
 db_error: Optional[str] = None
@@ -465,6 +479,7 @@ async def _connect_with_retry():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pool, _watchdog_task
+    _require_secret()
     # Connect in the background so a slow / recovering Postgres can't permanently
     # leave us in degraded mode (see _connect_with_retry). Requests that arrive
     # before the DB is ready still fail gracefully with 503 via get_db().
@@ -608,7 +623,8 @@ async def health_check():
         "status": "ok",
         "service": "motofix-dispatch-service",
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        "database": "connected" if pool else "disconnected"
+        "database": "connected" if pool else "disconnected",
+        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
     }
 
 
@@ -715,10 +731,7 @@ async def get_current_user(request: Request, db=Depends(get_db)) -> Dict:
         logger.error("❌ No token found in request")
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    secret_key = os.getenv("SECRET_KEY")
-    if not secret_key:
-        logger.error("❌ SECRET_KEY environment variable not set")
-        raise HTTPException(status_code=500, detail="Server configuration error")
+    secret_key = _require_secret()
 
     algorithm = os.getenv("ALGORITHM", "HS256")
 
@@ -814,10 +827,11 @@ def _media_rows_to_list(rows) -> list:
 
 class RequestCreate(BaseModel):
     customer_name: str = ""
-    service_type: str = "Other"
+    service_type: str = "Roadside assist"
     location: str = ""
     description: str = ""
     phone: str = ""
+    preferred_mechanic_id: Optional[int] = None
 
 class RequestOut(BaseModel):
     id: str
@@ -947,6 +961,7 @@ async def _dispatch_to_matched_mechanics(
     service_type: str,
     notifications_url: str,
     job_data: dict,
+    preferred_mechanic_id: Optional[int] = None,
 ) -> None:
     """
     Background task: call the matching service, get top-ranked mechanics,
@@ -972,6 +987,7 @@ async def _dispatch_to_matched_mechanics(
                     "latitude": lat,
                     "longitude": lng,
                     "service_type": service_type,
+                    "preferred_mechanic_id": preferred_mechanic_id,
                     "top_n": 10,
                 },
             )
@@ -1071,7 +1087,7 @@ async def create_request(
     logger.info("🟢 POST /requests/ hit")
     try:
         customer_name = (payload.customer_name or "").strip() or "Driver"
-        service_type = (payload.service_type or "").strip() or "Other"
+        service_type = (payload.service_type or "").strip() or "Roadside assist"
         location = (payload.location or "").strip()
         description = (payload.description or "").strip()
         # Always bind request to authenticated driver
@@ -1142,6 +1158,7 @@ async def create_request(
             service_type,
             notifications_url,
             request_data,
+            payload.preferred_mechanic_id,
         )
 
         return request_data
@@ -1256,6 +1273,7 @@ async def create_request_with_media(
     service_type: str = Form(...),
     location: str = Form(...),
     description: str = Form(...),
+    preferred_mechanic_id: Optional[int] = Form(None),
     media_files: Optional[List[UploadFile]] = File(default=None),
     db=Depends(get_db),
 ):
@@ -1268,7 +1286,7 @@ async def create_request_with_media(
     logger.info(f"📤 Creating request with media for customer: {customer_name}, files: {len(file_list)}")
     
     customer_name = (customer_name or "").strip() or "Driver"
-    service_type = (service_type or "").strip() or "Other"
+    service_type = (service_type or "").strip() or "Roadside assist"
     location = (location or "").strip()
     description = (description or "").strip()
     if current_user.get("role") not in ("driver", "admin"):
@@ -1352,6 +1370,7 @@ async def create_request_with_media(
         service_type,
         notifications_url_m,
         request_data,
+        preferred_mechanic_id,
     )
 
     return request_data
@@ -2505,145 +2524,58 @@ async def get_driver_payments(user_id: int, db=Depends(get_db)):
 async def get_stats(db=Depends(get_db)):
     """Public stats endpoint - no auth required"""
     try:
-        stats = {}
-        try:
-            stats["total_requests"] = await db.fetchval("SELECT COUNT(*) FROM service_requests") or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch total_requests: {e}")
-            stats["total_requests"] = 0
-            
-        try:
-            stats["completed_jobs"] = await db.fetchval(
+        stats = {
+            "total_requests": await db.fetchval("SELECT COUNT(*) FROM service_requests"),
+            "completed_jobs": await db.fetchval(
                 "SELECT COUNT(*) FROM service_requests WHERE status = 'completed'"
-            ) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch completed_jobs: {e}")
-            stats["completed_jobs"] = 0
-            
-        try:
-            stats["pending_jobs"] = await db.fetchval(
+            ),
+            "pending_jobs": await db.fetchval(
                 "SELECT COUNT(*) FROM service_requests WHERE status IN ('pending', 'accepted')"
-            ) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch pending_jobs: {e}")
-            stats["pending_jobs"] = 0
-        
-        try:
-            stats["total_mechanics"] = await db.fetchval("SELECT COUNT(*) FROM mechanics") or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch total_mechanics: {e}")
-            stats["total_mechanics"] = 0
-        try:
-            stats["verified_mechanics"] = await db.fetchval(
+            ),
+            "total_mechanics": await db.fetchval("SELECT COUNT(*) FROM mechanics"),
+            "verified_mechanics": await db.fetchval(
                 "SELECT COUNT(*) FROM mechanics WHERE is_verified = true"
-            ) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch verified_mechanics: {e}")
-            stats["verified_mechanics"] = 0
-
-        try:
-            stats["revenue_collected_ugx"] = await db.fetchval(
-                "SELECT COALESCE(SUM(quoted_amount), 0) FROM payments WHERE collection_status IN ('success','successful','cash')"
-            ) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch revenue_collected_ugx: {e}")
-            stats["revenue_collected_ugx"] = 0
-
-        try:
-            stats["paid_to_mechanics_ugx"] = await db.fetchval(
-                "SELECT COALESCE(SUM(mechanic_payout), 0) FROM payments WHERE disbursement_status = 'successful'"
-            ) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch paid_to_mechanics_ugx: {e}")
-            stats["paid_to_mechanics_ugx"] = 0
-
-        stats["profit_ugx"] = stats["revenue_collected_ugx"] - stats["paid_to_mechanics_ugx"]
-
-        try:
-            stats["total_transactions"] = await db.fetchval("SELECT COUNT(*) FROM payments") or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch total_transactions: {e}")
-            stats["total_transactions"] = 0
-
-        try:
-            stats["commission_earned_ugx"] = await db.fetchval(
-                "SELECT COALESCE(SUM(commission), 0) FROM payments WHERE collection_status IN ('success','successful','cash')"
-            ) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch commission_earned_ugx: {e}")
-            stats["commission_earned_ugx"] = 0
-
-        try:
-            stats["pending_collections_ugx"] = await db.fetchval(
-                "SELECT COALESCE(SUM(quoted_amount), 0) FROM payments WHERE collection_status = 'pending'"
-            ) or 0
-        except Exception as e:
-            logger.warning(f"Could not fetch pending_collections_ugx: {e}")
-            stats["pending_collections_ugx"] = 0
-
-        stats["as_of"] = datetime.utcnow().isoformat() + "Z"
-        
-        logger.info(f"📊 Stats endpoint called: {stats['total_requests']} total requests")
+            ),
+            # platform_fees is Motofix's actual revenue ledger; payments stores job-level quotes/collections.
+            "revenue_collected_ugx": await db.fetchval(
+                "SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'paid'"
+            ),
+            "pending_collections_ugx": await db.fetchval(
+                "SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'owed'"
+            ),
+            "total_transactions": await db.fetchval("SELECT COUNT(*) FROM payments"),
+            "as_of": datetime.utcnow().isoformat() + "Z",
+        }
+        logger.info("Stats endpoint called: %s total requests", stats["total_requests"])
         return stats
     except Exception as e:
-        logger.error(f"❌ Stats endpoint error: {str(e)}", exc_info=True)
-        # Return safe defaults instead of crashing
-        return {
-            "total_requests": 0,
-            "completed_jobs": 0,
-            "pending_jobs": 0,
-            "total_mechanics": 0,
-            "verified_mechanics": 0,
-            "revenue_collected_ugx": 0,
-            "paid_to_mechanics_ugx": 0,
-            "profit_ugx": 0,
-            "total_transactions": 0,
-            "as_of": datetime.utcnow().isoformat() + "Z",
-            "error": str(e)
-        }
+        logger.exception("Stats endpoint failed")
+        raise HTTPException(status_code=503, detail="Dashboard statistics are temporarily unavailable") from e
 
 # ────────────────────────────── REVENUE ENDPOINTS ──────────────────────────────
 
 @app.get("/revenue/")
 async def get_revenue(days: int = 30, db=Depends(get_db)):
     """
-    Returns daily collected revenue (UGX) from successful payments for the last N days.
-    Falls back to daily request counts if no payment data exists yet.
+    Returns daily Motofix platform-fee revenue (UGX) settled in the last N days.
+    The payments table contains job-level quotes/collections, not platform revenue.
     """
     try:
-        payment_query = """
-            SELECT to_char(created_at::date, 'YYYY-MM-DD') AS date,
-                   COALESCE(SUM(quoted_amount), 0)::bigint AS amount
-            FROM payments
-            WHERE collection_status IN ('success','successful','cash')
-              AND created_at >= NOW() - ($1 || ' days')::interval
+        query = """
+            SELECT to_char(COALESCE(paid_at, created_at)::date, 'YYYY-MM-DD') AS date,
+                   COALESCE(SUM(amount), 0)::bigint AS amount
+            FROM platform_fees
+            WHERE status = 'paid'
+              AND COALESCE(paid_at, created_at) >= NOW() - ($1 || ' days')::interval
             GROUP BY date
             ORDER BY date ASC
         """
-        rows = await db.fetch(payment_query, str(days))
-
-        if rows:
-            data = [{"date": r["date"], "amount": int(r["amount"])} for r in rows]
-            logger.info(f"📈 Revenue endpoint: {len(data)} days of payment data")
-            return data
-
-        # No payments yet — fall back to request counts so the chart isn't empty
-        fallback_query = """
-            SELECT to_char(created_at::date, 'YYYY-MM-DD') AS date,
-                   COUNT(*) AS amount
-            FROM service_requests
-            WHERE created_at >= NOW() - ($1 || ' days')::interval
-            GROUP BY date
-            ORDER BY date ASC
-        """
-        fallback_rows = await db.fetch(fallback_query, str(days))
-        data = [{"date": r["date"], "amount": int(r["amount"])} for r in fallback_rows]
-        logger.info(f"📈 Revenue endpoint: no payments yet, returning {len(data)} days of request counts")
-        return data
+        rows = await db.fetch(query, str(days))
+        return [{"date": r["date"], "amount": int(r["amount"])} for r in rows]
 
     except Exception as e:
-        logger.error(f"❌ Revenue endpoint error: {str(e)}", exc_info=True)
-        return []
+        logger.exception("Revenue endpoint failed")
+        raise HTTPException(status_code=503, detail="Revenue data is temporarily unavailable") from e
 
 # ════════════════════════════════ PAYMENTS & MTN MOMO ════════════════════════════════
 

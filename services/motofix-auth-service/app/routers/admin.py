@@ -810,7 +810,7 @@ async def list_mechanics(
         total = await conn.fetchval(f"SELECT COUNT(*) FROM mechanics {where}", *params)
         rows = await conn.fetch(
             f"""SELECT id, full_name AS name, phone, location,
-                       is_verified, COALESCE(is_banned, FALSE) AS is_banned,
+                       is_verified, is_available, COALESCE(is_banned, FALSE) AS is_banned,
                        ban_reason, rating, jobs_completed, created_at
                 FROM mechanics {where}
                 ORDER BY created_at DESC

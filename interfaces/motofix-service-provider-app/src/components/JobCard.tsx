@@ -80,6 +80,8 @@ export default function JobCard({ request, distance, onAccept, onViewDetails, ex
   const cardBorder = isDark ? '1.5px solid rgba(255,255,255,0.18)' : '1.5px solid rgba(0,0,0,0.65)'
 
   const IssueIcon = getIssueIcon(request.issue_type ?? request.service_type)
+  const isTowJob = /tow|recovery/i.test(request.service_type ?? '')
+  const jobTypeLabel = isTowJob ? 'Tow / recovery' : 'Roadside assist'
   const hasCoords = request.location_lat != null && request.location_lng != null
   const locationText = useReadableLocation(request)
 
@@ -106,8 +108,11 @@ export default function JobCard({ request, distance, onAccept, onViewDetails, ex
             </div>
             <div>
               <p style={{ fontSize: 14, fontWeight: 900, color: C.textHi, letterSpacing: '-0.01em' }}>
-                {request.issue_type ?? request.service_type ?? 'Service Request'}
+                {request.issue_type ?? jobTypeLabel}
               </p>
+              <span style={{ display: 'inline-block', marginTop: 3, borderRadius: 999, padding: '2px 7px', background: `${isTowJob ? C.blue : C.green}14`, color: isTowJob ? C.blue : C.green, fontSize: 9, fontWeight: 800 }}>
+                {jobTypeLabel}
+              </span>
               {request.driver_name && (
                 <p style={{ fontSize: 11, color: C.textFaint, marginTop: 1 }}>
                   {request.driver_name}

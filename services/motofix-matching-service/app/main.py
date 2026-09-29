@@ -29,7 +29,7 @@ from jose import JWTError, jwt
 load_dotenv()
 
 from .schemas import DispatchOutcome, MatchRequest, MatchResponse
-from .scoring import rank_mechanics
+from .scoring import rank_launch_fallback, rank_mechanics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,9 +38,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-SECRET_KEY = os.getenv("SECRET_KEY", "change_me_in_production")
+
+
+def _require_secret() -> str:
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        logger.critical("Missing required SECRET_KEY environment variable for motofix-matching-service")
+        raise RuntimeError(
+            "Missing required SECRET_KEY environment variable for motofix-matching-service. "
+            "This service must fail loudly instead of accepting unsigned tokens."
+        )
+    return secret
+
+
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 MECHANICS_SERVICE_URL = os.getenv("MECHANICS_SERVICE_URL", "http://localhost:8002")
+LAUNCH_MODE = os.getenv("LAUNCH_MODE", "false").strip().lower() == "true"
 
 pool: Optional[asyncpg.Pool] = None
 
@@ -48,6 +62,7 @@ pool: Optional[asyncpg.Pool] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pool
+    _require_secret()
     if DATABASE_URL:
         # Open a small pool of reusable database connections (faster than opening
         # a fresh connection for every request).
@@ -139,7 +154,7 @@ def _require_token(authorization: str = Header(...)) -> dict:
     except ValueError:
         raise HTTPException(status_code=401, detail="Malformed Authorization header")
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return jwt.decode(token, _require_secret(), algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
@@ -151,6 +166,7 @@ async def health():
     return {
         "status": "ok",
         "service": "mechanic-matching",
+        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -205,13 +221,33 @@ async def match_mechanics(
         service_type=body.service_type,
         excluded_ids=excluded_ids,
         top_n=body.top_n or 5,
+        preferred_mechanic_id=body.preferred_mechanic_id,
     )
 
     if not ranked:
-        raise HTTPException(
-            status_code=404,
-            detail="No eligible mechanics found within range for this request.",
-        )
+        if LAUNCH_MODE:
+            ranked = rank_launch_fallback(
+                mechanics=mechanics,
+                request_lat=body.latitude,
+                request_lon=body.longitude,
+                excluded_ids=excluded_ids,
+                top_n=body.top_n or 5,
+                service_type=body.service_type,
+                preferred_mechanic_id=body.preferred_mechanic_id,
+            )
+            if ranked:
+                logger.warning(
+                    "Launch matching fallback used: request_id=%s considered=%s returned=%s",
+                    body.request_id,
+                    len(mechanics),
+                    len(ranked),
+                )
+
+        if not ranked:
+            raise HTTPException(
+                status_code=404,
+                detail="No eligible mechanics found within range for this request.",
+            )
 
     # Save the chosen mechanics as 'pending' so that if we re-run /match later
     # (because someone declined) we remember who we already contacted.

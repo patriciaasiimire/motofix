@@ -28,6 +28,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _require_secret() -> str:
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        logging.getLogger("motofix-auth").critical(
+            "Missing required SECRET_KEY environment variable for auth-service"
+        )
+        raise RuntimeError("SECRET_KEY environment variable is required before auth-service startup")
+    return secret
+
 from .routers import users
 from .routers import driver, provider, admin, applications, parts_catalog, parts_orders
 from app.core.cors import setup_cors
@@ -40,6 +50,7 @@ logger = logging.getLogger("motofix-auth")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _require_secret()
     database_url = os.getenv("DATABASE_URL")
     # Resilient pool: a small warm pool (so we don't storm Postgres on startup),
     # room to grow under load, and recycling of idle connections so a stale one
@@ -497,6 +508,7 @@ async def health_check():
     return {
         "status": "ok",
         "service": "motofix-auth-service",
+        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -505,6 +517,7 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
+    _require_secret()
     logger.info("=" * 70)
     logger.info("🚀 MOTOFIX Auth Service v2.0 Starting")
     logger.info("=" * 70)

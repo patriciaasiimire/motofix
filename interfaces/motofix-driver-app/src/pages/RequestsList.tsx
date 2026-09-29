@@ -103,6 +103,30 @@ export default function RequestsList() {
     setTimeout(() => setRefreshing(false), 600);
   };
 
+  const reRequest = (request: (typeof requests)[number]) => {
+    const type = String(request.service_type ?? '').toLowerCase();
+    const isTow = /tow|recovery/.test(type);
+    const issueType = isTow ? 'towing' : 'other';
+    const serviceType = isTow ? 'towing_provider' : 'mechanic';
+    navigate('/locating', {
+      state: {
+        skipTriage: true,
+        issueType,
+        serviceType,
+        reRequestServiceType: isTow ? 'Tow / recovery' : 'Roadside assist',
+        reRequestDescription: request.description || '',
+        reRequestId: String(request.id),
+        lastPin: (() => {
+          const m = String(request.location ?? '').match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+          if (!m) return undefined;
+          const lat = Number(m[1]);
+          const lng = Number(m[2]);
+          return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined;
+        })(),
+      },
+    });
+  };
+
   const historyRequests = requests.filter(r => ['completed', 'cancelled'].includes(r.status));
   const completed = historyRequests.filter(r => r.status === 'completed').length;
   const cancelled  = historyRequests.filter(r => r.status === 'cancelled').length;
@@ -319,7 +343,12 @@ export default function RequestsList() {
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {filtered.map((request, index) => (
-                    <RequestCard key={request.id} request={request} index={index} />
+                    <RequestCard
+                      key={request.id}
+                      request={request}
+                      index={index}
+                      onReRequest={() => reRequest(request)}
+                    />
                   ))}
                 </div>
               </>

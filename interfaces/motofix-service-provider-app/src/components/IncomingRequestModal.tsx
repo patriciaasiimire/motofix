@@ -51,8 +51,12 @@ export default function IncomingRequestModal({ request, onAccept, onDecline }: P
   const mm = String(Math.floor(seconds / 60)).padStart(2, '0')
   const ss = String(seconds % 60).padStart(2, '0')
   const progress = (seconds / 300) * 100
-  const isTowing = (request.service_type ?? '').toLowerCase() === 'towing'
+  const isTowing = /tow|recovery/i.test(request.service_type ?? '')
   const ServiceIcon = isTowing ? Truck : Wrench
+  const jobTypeLabel = isTowing ? 'Tow / recovery' : 'Roadside assist'
+  const jobExpectation = isTowing
+    ? 'Take the vehicle to the garage or safer place described in the request.'
+    : 'First aid and triage on site; major repairs may need a garage.'
 
   const timerColor = seconds > 120 ? C.amber : seconds > 60 ? '#fb923c' : '#f87171'
 
@@ -152,10 +156,10 @@ export default function IncomingRequestModal({ request, onAccept, onDecline }: P
 
         {/* Title */}
         <h2 style={{ fontSize: 18, fontWeight: 900, color: C.textHi, textAlign: 'center', marginBottom: 2 }}>
-          New Job Request
+          New {jobTypeLabel} Request
         </h2>
         <p style={{ fontSize: 11, color: C.textFaint, textAlign: 'center', marginBottom: 12, letterSpacing: '0.03em' }}>
-          A driver nearby needs your help
+          {jobExpectation}
         </p>
 
         {/* Countdown */}
@@ -188,7 +192,7 @@ export default function IncomingRequestModal({ request, onAccept, onDecline }: P
             </p>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <p style={{ fontSize: 15, fontWeight: 900, color: C.textHi }}>
-                {request.issue_type ?? request.service_type ?? 'Service Request'}
+                {jobTypeLabel}{request.issue_type ? ` · ${request.issue_type}` : ''}
               </p>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 4,

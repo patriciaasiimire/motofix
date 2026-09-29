@@ -26,8 +26,8 @@ import { toast } from 'sonner';
 
 /* ── All services (editorial list) ────────────────────────── */
 const ALL_SERVICES = [
-  { id: 'mechanic',   label: 'Mechanic & Repair', icon: Wrench,     color: '#F59E0B', desc: 'On-site fix — engine, tyres, battery, electrical' },
-  { id: 'breakdown',  label: 'Breakdown Rescue',  icon: Truck, color: '#60A5FA', desc: "Won't move? We fix it on the spot — or tow it" },
+  { id: 'mechanic',   label: 'Mechanic & Repair', icon: Wrench,     color: '#F59E0B', desc: 'On-site assist — engine, tyres, battery, electrical' },
+  { id: 'breakdown',  label: 'Roadside assist / tow', icon: Truck, color: '#60A5FA', desc: 'First aid on the road, or tow to a garage if needed' },
   { id: 'ambulance',  label: 'Ambulance & Medical', icon: HeartPulse, color: '#f87171', desc: 'Medical emergency dispatch'                  },
   { id: 'insurance',  label: 'Insurance Coverage & Claims', icon: Shield, color: '#34D399', desc: 'File a claim or check your coverage'         },
   { id: 'spare_parts', label: 'Spare Parts & Self-Fix', icon: ShoppingBag, color: '#A78BFA', desc: 'Find dealers · order parts to fix it yourself' },
@@ -311,7 +311,13 @@ export default function Home() {
   const [bdFix, setBdFix] = useState(true);
   const [bdTow, setBdTow] = useState(true);
   const [sosBlocked,    setSosBlocked]    = useState(false);
-  const [pendingReview, setPendingReview] = useState<{ requestId: string; mechanicName: string } | null>(null);
+  const [pendingReview, setPendingReview] = useState<{
+    requestId: string;
+    mechanicName: string;
+    mechanicId?: string | number;
+    serviceType?: string;
+    description?: string;
+  } | null>(null);
   const sosSheetRef  = useRef<HTMLDivElement>(null);
   const sosDragRef   = useRef({ startY: 0, dragging: false, delta: 0 });
 
@@ -376,9 +382,44 @@ export default function Home() {
   const activeReq = active[0] ?? null;          // drivers may have at most 1 active request
   const hasActive = !!activeReq;
   const history   = requests.filter(r =>  ['completed', 'cancelled'].includes(r.status));
-  const completed = history.filter(r => r.status === 'completed').length;
+  const completedJobs = history.filter(r => r.status === 'completed');
+  const completed = completedJobs.length;
+  const lastCompleted = [...completedJobs].sort((a, b) => {
+    const ta = new Date(a.completed_at || a.created_at || 0).getTime();
+    const tb = new Date(b.completed_at || b.created_at || 0).getTime();
+    return tb - ta;
+  })[0] ?? null;
   const { firstName, initials } = greeting(user?.full_name);
   const question = useRotatingGreeting();
+
+  const parsePin = (loc?: string) => {
+    const m = String(loc ?? '').match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+    if (!m) return undefined;
+    const lat = Number(m[1]);
+    const lng = Number(m[2]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return undefined;
+    return { lat, lng };
+  };
+
+  const goHelpAgain = () => {
+    if (hasActive) {
+      setSosBlocked(true);
+      return;
+    }
+    const type = String(lastCompleted?.service_type ?? '').toLowerCase();
+    const isTow = /tow|recovery/.test(type);
+    navigate('/locating', {
+      state: {
+        skipTriage: true,
+        issueType: isTow ? 'towing' : 'other',
+        serviceType: isTow ? 'towing_provider' : 'mechanic',
+        reRequestServiceType: isTow ? 'Tow / recovery' : 'Roadside assist',
+        reRequestDescription: lastCompleted?.description || '',
+        reRequestId: lastCompleted ? String(lastCompleted.id) : undefined,
+        lastPin: parsePin(lastCompleted?.location),
+      },
+    });
+  };
 
   const goRequest = (issueType?: string, breakdownPrefs?: { fixOnSpot: boolean; allowTow: boolean }) => {
     if (hasActive) {
@@ -488,14 +529,14 @@ export default function Home() {
                 <div style={{ width: 56, height: 56, borderRadius: 17, margin: '0 auto 14px', background: 'rgba(245,158,11,0.14)', border: '1.5px solid rgba(245,158,11,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 24px rgba(245,158,11,0.18)' }}>
                   <Truck style={{ width: 27, height: 27, color: '#F59E0B' }} />
                 </div>
-                <p style={{ color: 'var(--text-hi)', fontWeight: 900, fontSize: 19, marginBottom: 6 }}>Breakdown Rescue</p>
+                <p style={{ color: 'var(--text-hi)', fontWeight: 900, fontSize: 19, marginBottom: 6 }}>Roadside assist or tow</p>
                 <p style={{ color: 'var(--text-lo)', fontSize: 12.5, lineHeight: 1.55, padding: '0 4px' }}>Two quick questions so we send the right help and agree the plan with you.</p>
               </div>
               {/* questions */}
               <div style={{ padding: '16px 18px 4px' }}>
                 {[
-                  { key: 'fix', q: '🔧 Try to fix it on the spot first?', val: bdFix, set: setBdFix, yes: 'Yes, fix it', no: 'No, just tow' },
-                  { key: 'tow', q: '🚛 OK to tow it to a garage if the on-road repair fails?', val: bdTow, set: setBdTow, yes: 'Yes, tow it', no: 'No' },
+                  { key: 'fix', q: '🔧 Try on-site assist first?', val: bdFix, set: setBdFix, yes: 'Yes, assist on site', no: 'No, just tow' },
+                  { key: 'tow', q: '🚛 OK to tow it to a garage if on-site assist isn’t enough?', val: bdTow, set: setBdTow, yes: 'Yes, tow it', no: 'No' },
                 ].map(({ key, q, val, set, yes, no }) => (
                   <div key={key} style={{ background: 'var(--surface-1)', border: '1px solid var(--border-2)', borderRadius: 16, padding: '13px 13px 14px', marginBottom: 12 }}>
                     <p style={{ color: 'var(--text-md)', fontSize: 13, fontWeight: 700, marginBottom: 11, lineHeight: 1.4 }}>{q}</p>
@@ -887,6 +928,11 @@ export default function Home() {
           <p className="mf-subtitle" style={{ color: 'var(--text-md)', fontSize: 12, lineHeight: 1.5 }}>
             {hasActive ? '1 request in progress' : 'No requests in progress at the moment'}
           </p>
+          {!hasActive && (
+            <p style={{ color: 'var(--text-lo)', fontSize: 11, lineHeight: 1.45, marginTop: 5 }}>
+              We try your preferred helper when eligible; otherwise, the next verified provider who can handle the job.
+            </p>
+          )}
         </div>
 
         {/* ── Rate mechanic nudge banner ── */}
@@ -916,7 +962,7 @@ export default function Home() {
               <button
                 onClick={() => {
                   dismissReview();
-                  navigate('/rate-motofix', { state: { mode: 'mechanic', requestId: pendingReview.requestId, mechanicName: pendingReview.mechanicName } });
+                  navigate('/rate-motofix', { state: pendingReview });
                 }}
                 style={{ height: 34, padding: '0 12px', borderRadius: 10, border: 'none', background: '#F59E0B', color: '#111', fontSize: 12, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
               >
@@ -985,7 +1031,9 @@ export default function Home() {
                   <p style={{ color: 'var(--text-dim)', fontSize: 12, marginTop: 5, lineHeight: 1.4 }}>
                     {hasReq
                       ? <><span style={{ color: isDark ? st!.color : st!.lightColor, fontWeight: 700 }}>{st!.label}</span> — {req!.service_type} · tap to track</>
-                      : 'No active requests — tap SOS to get help'}
+                      : completed >= 1
+                        ? 'No active requests — tap Get help again'
+                        : 'No active requests — tap SOS to get help'}
                   </p>
                 </div>
                 {hasReq && <ChevronRight style={{ width: 20, height: 20, color: st!.color + '80', flexShrink: 0 }} />}
@@ -1005,7 +1053,51 @@ export default function Home() {
           </div>
         )}
 
-        {/* ── SOS hero block — proper red ── */}
+        {/* ── Returning driver: Get help again (skips FaultChat / DescribeIssue) ── */}
+        {completed >= 1 && (
+          <div
+            onClick={() => !driverOnline ? undefined : goHelpAgain()}
+            className="relative rounded-3xl overflow-hidden mb-3"
+            style={{
+              background: driverOnline ? 'linear-gradient(135deg, #F59E0B, #D97706)' : '#3a2a10',
+              boxShadow: driverOnline ? '0 10px 32px rgba(245,158,11,0.35)' : 'none',
+              border: isDark ? (driverOnline ? '1.5px solid rgba(251,191,36,0.45)' : '1px solid rgba(245,158,11,0.2)') : '1.5px solid #000',
+              cursor: driverOnline ? 'pointer' : 'not-allowed',
+              opacity: driverOnline ? 1 : 0.5,
+            }}
+          >
+            <div className="relative flex items-center justify-between px-6 py-5">
+              <div>
+                <p style={{ color: 'rgba(17,24,39,0.72)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.22em', fontWeight: 700, marginBottom: 6 }}>
+                  Faster than WhatsApp
+                </p>
+                <p style={{ color: '#111827', fontWeight: 900, fontSize: 26, letterSpacing: '-0.02em', lineHeight: 1 }}>Get help again</p>
+                <p style={{ color: 'rgba(17,24,39,0.78)', fontSize: 11, marginTop: 6, lineHeight: 1.45, maxWidth: 240 }}>
+                  {/tow|recovery/i.test(lastCompleted?.service_type ?? '') ? 'Tow / recovery' : 'Roadside assist'} · current GPS · matching now
+                </p>
+              </div>
+              <ChevronRight style={{ width: 22, height: 22, color: '#111827', flexShrink: 0 }} />
+            </div>
+          </div>
+        )}
+
+        {completed >= 1 && (
+          <button
+            onClick={() => !driverOnline ? undefined : goRequest()}
+            style={{
+              width: '100%', marginBottom: 16, padding: '12px 16px', borderRadius: 16,
+              border: isDark ? '1px solid var(--border-3)' : '1.5px solid #000',
+              background: 'var(--surface-1)', color: 'var(--text-md)',
+              fontSize: 13, fontWeight: 700, cursor: driverOnline ? 'pointer' : 'not-allowed',
+              opacity: driverOnline ? 1 : 0.5, textAlign: 'left',
+            }}
+          >
+            New or different problem — full triage
+          </button>
+        )}
+
+        {/* ── SOS hero block — first-time / no completed jobs ── */}
+        {completed < 1 && (
         <div
           onClick={() => !driverOnline ? undefined : goRequest()}
           className="relative rounded-3xl overflow-hidden mb-5"
@@ -1068,6 +1160,7 @@ export default function Home() {
             </div>
           </div>
         </div>
+        )}
 
         {/* ── All services — editorial ruled list ── */}
         <div className="mb-5">

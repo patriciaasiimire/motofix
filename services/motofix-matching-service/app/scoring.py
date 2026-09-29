@@ -20,6 +20,7 @@ match priority falls as distance rises, unless offset by stronger skill/rating.
 """
 
 import math
+import os
 from typing import Any, Dict, List, Optional
 
 # ── Model feature importances (from the XGBoost-Monotonic matching model) ──────
@@ -31,8 +32,10 @@ WEIGHT_RATING       = 0.0267
 # this so the headline number reads as a 0–100 "match priority %".
 _WEIGHT_SUM = WEIGHT_SPEC_MATCH + WEIGHT_AVAILABILITY + WEIGHT_PROXIMITY + WEIGHT_RATING
 
-# Hard cutoff — mechanics beyond this distance are not considered
-MAX_DISTANCE_KM = 50.0
+# Hard cutoff — mechanics beyond this distance are not considered.
+MAX_DISTANCE_KM = float(os.getenv("MATCH_MAX_DISTANCE_KM", "50"))
+if MAX_DISTANCE_KM <= 0:
+    raise RuntimeError("MATCH_MAX_DISTANCE_KM must be greater than zero")
 
 # ── Capability matching ────────────────────────────────────────────────────────
 # A request needs a specific capability; breakdown needs BOTH (the provider can
@@ -70,6 +73,10 @@ def _capability_tier(mechanic: Dict[str, Any], service_type: str) -> int:
     """
     st = (service_type or "").lower()
     can_mech, can_tow = _capabilities(mechanic)
+    if any(term in st for term in ("tow", "recovery", "garage transfer")):
+        return 1 if can_tow else 0
+    if any(term in st for term in ("roadside assist", "on-site assist", "first aid")):
+        return 1 if can_mech else 0
     if "breakdown" in st:
         if can_mech and can_tow:
             return 2          # fix-or-tow → ideal
@@ -191,6 +198,7 @@ def score_mechanic(
     request_lon: float,
     service_type: str,
     excluded_ids: Optional[List[int]] = None,
+    preferred_mechanic_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Score a single mechanic against a breakdown request.
@@ -214,7 +222,7 @@ def score_mechanic(
     else:
         distance_km = haversine_km(request_lat, request_lon, float(m_lat), float(m_lon))
 
-    if distance_km >= MAX_DISTANCE_KM:
+    if distance_km > MAX_DISTANCE_KM:
         return None
 
     prox = _proximity_score(distance_km)
@@ -244,6 +252,7 @@ def score_mechanic(
 
     return {
         "mechanic_id": mechanic["id"],
+        "is_preferred": mechanic["id"] == preferred_mechanic_id,
         "mechanic_name": (
             mechanic.get("full_name")
             or mechanic.get("name")
@@ -278,21 +287,91 @@ def rank_mechanics(
     service_type: str,
     excluded_ids: Optional[List[int]] = None,
     top_n: int = 5,
+    preferred_mechanic_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Score all mechanics, prefer those with the required capability, return top N.
 
-    Capability is a *preferred* hard gate: providers who can actually do the job
-    (e.g. only 'both' providers for a breakdown) are returned first. If none are
-    capable we fall back to the rest by score, so a request is never left with no
-    candidates purely on capability.
+    Capability is a hard gate for normal scoring. Launch mode has a separate,
+    explicitly labelled distance-only fallback when no capable candidate exists.
     """
     scored = []
     for m in mechanics:
-        result = score_mechanic(m, request_lat, request_lon, service_type, excluded_ids)
+        result = score_mechanic(
+            m, request_lat, request_lon, service_type, excluded_ids, preferred_mechanic_id
+        )
         if result is not None:
             scored.append(result)
     eligible = [s for s in scored if s.get("capability_tier", 0) >= 1]
-    pool = eligible if eligible else scored
     # Sort by capability tier first (ideal 'both' over tow-only for breakdown), then score.
-    pool.sort(key=lambda x: (x.get("capability_tier", 0), x["total_score"]), reverse=True)
-    return pool[:top_n]
+    eligible.sort(
+        key=lambda x: (x["is_preferred"], x.get("capability_tier", 0), x["total_score"]),
+        reverse=True,
+    )
+    return eligible[:top_n]
+
+
+def rank_launch_fallback(
+    mechanics: List[Dict[str, Any]],
+    request_lat: float,
+    request_lon: float,
+    excluded_ids: Optional[List[int]] = None,
+    top_n: int = 5,
+    service_type: str = "",
+    preferred_mechanic_id: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Return nearest verified, available providers without implying skill scores."""
+    excluded = set(excluded_ids or [])
+    candidates = []
+    for mechanic in mechanics:
+        mechanic_id = mechanic.get("id")
+        if mechanic_id in excluded or not mechanic.get("is_verified"):
+            continue
+        if mechanic.get("is_available") is not True:
+            continue
+        latitude, longitude = mechanic.get("latitude"), mechanic.get("longitude")
+        if latitude is None or longitude is None:
+            continue
+
+        distance = haversine_km(request_lat, request_lon, float(latitude), float(longitude))
+        if distance > MAX_DISTANCE_KM:
+            continue
+        capability_tier = _capability_tier(mechanic, service_type)
+
+        candidates.append({
+            "mechanic_id": mechanic_id,
+            "is_preferred": mechanic_id == preferred_mechanic_id,
+            "mechanic_name": mechanic.get("full_name") or mechanic.get("name") or f"Mechanic {mechanic_id}",
+            "phone": mechanic.get("phone"),
+            "fcm_token": mechanic.get("fcm_token"),
+            "distance_km": round(distance, 2),
+            "capability_tier": capability_tier,
+            "total_score": 0.0,
+            "match_priority": 0.0,
+            "rationale": (
+                "Launch fallback: nearest available"
+                if capability_tier >= 1
+                else "Launch fallback: nearest available alternate provider type"
+            ),
+            "score_breakdown": {
+                "spec_match": 0.0,
+                "availability": 0.0,
+                "proximity": 0.0,
+                "rating": 0.0,
+            },
+            "weights": {
+                "spec_match": WEIGHT_SPEC_MATCH,
+                "availability": WEIGHT_AVAILABILITY,
+                "proximity": WEIGHT_PROXIMITY,
+                "rating": WEIGHT_RATING,
+            },
+        })
+
+    candidates.sort(
+        key=lambda candidate: (
+            candidate["capability_tier"] >= 1,
+            candidate["is_preferred"],
+            -candidate["distance_km"],
+        ),
+        reverse=True,
+    )
+    return candidates[:top_n]

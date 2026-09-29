@@ -33,7 +33,7 @@ const C = {
   muted:    'var(--adm-muted)',
 } as const;
 
-type ModalKey = 'totalRequests' | 'revenue' | 'completedJobs' | 'pendingJobs' | 'totalMechanics' | 'netProfit' | null;
+type ModalKey = 'totalRequests' | 'revenue' | 'completedJobs' | 'pendingJobs' | 'totalMechanics' | 'platformFees' | null;
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -47,13 +47,12 @@ export default function Dashboard() {
       toast.success(`Welcome back, ${name}`);
     }
   }, []);
-  const { data: revenueData, isLoading: revenueLoading } = useRevenueChart(30, 60000);
+  const { data: revenueData, isLoading: revenueLoading, error: revenueError } = useRevenueChart(30, 60000);
 
   const s = stats ?? {
     totalRequests: 0, completedJobs: 0, pendingJobs: 0,
     totalMechanics: 0, verifiedMechanics: 0,
-    revenueCollected: 0, paidToMechanics: 0, profit: 0,
-    commissionEarned: 0,
+    revenueCollected: 0, pendingCollections: 0,
   };
 
   const completionRate = s.totalRequests > 0
@@ -64,22 +63,31 @@ export default function Dashboard() {
     ? Math.round((s.verifiedMechanics / s.totalMechanics) * 100)
     : 0;
 
+  if (statsError && !stats) {
+    return (
+      <DashboardLayout>
+        <BackLogoutGuard />
+        <div
+          role="alert"
+          style={{
+            background: 'rgba(248,113,113,0.08)',
+            border: '1px solid rgba(248,113,113,0.25)',
+            borderRadius: 12,
+            padding: '18px 20px',
+            fontSize: 13,
+            color: 'var(--adm-red)',
+          }}
+        >
+          Dashboard statistics are unavailable. Check the analytics and database services, then refresh.
+        </div>
+      </DashboardLayout>
+    );
+  }
+
   return (
     <DashboardLayout>
       <BackLogoutGuard />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-
-        {/* Error banner */}
-        {statsError && !stats && (
-          <div style={{
-            background: 'rgba(248,113,113,0.08)',
-            border: '1px solid rgba(248,113,113,0.25)',
-            borderRadius: 12, padding: '12px 18px',
-            fontSize: 13, color: 'var(--adm-red)',
-          }}>
-            Failed to load dashboard statistics. Please check your connection and refresh.
-          </div>
-        )}
 
         {/* ── Row 1: Two hero metric cards ─────────────────────────────── */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
@@ -95,8 +103,8 @@ export default function Dashboard() {
           <HeroCard
             title="Revenue Collected"
             value={formatUGX(s.revenueCollected)}
-            subValue={formatUGX(s.paidToMechanics)}
-            subLabel="Paid out"
+            subValue={formatUGX(s.pendingCollections)}
+            subLabel="Fees outstanding"
             viewLabel="View Payments"
             onView={() => navigate('/payments')}
             onMore={() => setModal('revenue')}
@@ -138,12 +146,12 @@ export default function Dashboard() {
             isLoading={statsLoading}
           />
           <ChipCard
-            title="Commission Collected"
-            value={formatUGX(s.commissionEarned)}
+            title="Platform Fees Collected"
+            value={formatUGX(s.revenueCollected)}
             icon={<Wallet size={18} />}
-            sub="UGX 10,000 / job — since launch"
+            sub="UGX 10,000 / completed job"
             iconColor={C.purple}
-            onMore={() => setModal('netProfit')}
+            onMore={() => setModal('platformFees')}
             onClick={() => navigate('/payments')}
             isLoading={statsLoading}
           />
@@ -153,7 +161,7 @@ export default function Dashboard() {
         <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
 
           {/* Chart */}
-          <RevenueChart data={revenueData ?? []} isLoading={revenueLoading} />
+          <RevenueChart data={revenueData ?? []} isLoading={revenueLoading} hasError={!!revenueError} />
 
           {/* Financial breakdown panel */}
           <div style={{
@@ -208,17 +216,12 @@ export default function Dashboard() {
                 isLoading={statsLoading}
               />
               <FinanceRow
-                label="Paid to Mechanics"
-                value={formatUGX(s.paidToMechanics)}
-                color={C.red}
-                pct={s.revenueCollected > 0 ? Math.round((s.paidToMechanics / s.revenueCollected) * 100) : 0}
-                isLoading={statsLoading}
-              />
-              <FinanceRow
-                label="Commission (10k/job)"
-                value={formatUGX(s.commissionEarned)}
-                color={C.green}
-                pct={s.revenueCollected > 0 ? Math.round((s.commissionEarned / s.revenueCollected) * 100) : 0}
+                label="Fees Outstanding"
+                value={formatUGX(s.pendingCollections)}
+                color="#f59e0b"
+                pct={s.revenueCollected + s.pendingCollections > 0
+                  ? Math.round((s.pendingCollections / (s.revenueCollected + s.pendingCollections)) * 100)
+                  : 0}
                 isLoading={statsLoading}
                 isLast
               />
@@ -427,7 +430,7 @@ export default function Dashboard() {
 type StatsShape = {
   totalRequests: number; completedJobs: number; pendingJobs: number;
   totalMechanics: number; verifiedMechanics: number;
-  revenueCollected: number; paidToMechanics: number; profit: number;
+  revenueCollected: number; pendingCollections: number;
 };
 
 function CardDetailModal({
@@ -442,8 +445,6 @@ function CardDetailModal({
   const pendingRate = s.totalRequests > 0 ? Math.round((s.pendingJobs / s.totalRequests) * 100) : 0;
   const cancelledJobs = Math.max(0, s.totalRequests - s.completedJobs - s.pendingJobs);
   const cancelRate = s.totalRequests > 0 ? Math.round((cancelledJobs / s.totalRequests) * 100) : 0;
-  const payoutPct = s.revenueCollected > 0 ? Math.round((s.paidToMechanics / s.revenueCollected) * 100) : 0;
-  const profitPct = s.revenueCollected > 0 ? Math.round((s.profit / s.revenueCollected) * 100) : 0;
   const unverifiedMechanics = Math.max(0, s.totalMechanics - s.verifiedMechanics);
   const unverifiedPct = 100 - verifiedPct;
 
@@ -471,15 +472,15 @@ function CardDetailModal({
       title: 'Revenue Collected',
       icon: <Wallet size={20} />,
       accentColor: C.amber,
-      description: 'Total money processed through MOTOFIX since launch.',
+      description: 'Platform fees marked paid in the platform_fees ledger.',
       mainValue: formatUGX(s.revenueCollected),
-      mainLabel: 'Gross collected',
+      mainLabel: 'Fees collected',
       rows: [
-        { label: 'Revenue Collected', value: formatUGX(s.revenueCollected), pct: 100, color: C.amber },
-        { label: 'Paid to Mechanics', value: formatUGX(s.paidToMechanics), pct: payoutPct, color: C.red },
-        { label: 'Net Profit', value: formatUGX(s.profit), pct: profitPct, color: C.green },
+        { label: 'Fees collected', value: formatUGX(s.revenueCollected), pct: 100, color: C.amber },
+        { label: 'Fees outstanding', value: formatUGX(s.pendingCollections), pct: s.revenueCollected + s.pendingCollections > 0
+          ? Math.round((s.pendingCollections / (s.revenueCollected + s.pendingCollections)) * 100) : 0, color: '#f59e0b' },
       ],
-      footer: `Platform retains ${profitPct}% of gross revenue as net profit.`,
+      footer: 'Collected and outstanding amounts are sourced from platform_fees.',
     },
     completedJobs: {
       title: 'Completed Jobs',
@@ -522,19 +523,18 @@ function CardDetailModal({
       ],
       footer: `${verifiedPct}% of the fleet is verified and eligible for jobs.`,
     },
-    netProfit: {
-      title: 'Net Profit',
+    platformFees: {
+      title: 'Platform Fee Ledger',
       icon: <Wallet size={20} />,
       accentColor: C.purple,
-      description: 'MOTOFIX platform earnings after all mechanic payouts.',
-      mainValue: formatUGX(s.profit),
-      mainLabel: 'Platform earnings',
+      description: 'Paid and owed platform fees recorded for completed jobs.',
+      mainValue: formatUGX(s.revenueCollected),
+      mainLabel: 'Fees collected',
       rows: [
-        { label: 'Gross Revenue', value: formatUGX(s.revenueCollected), pct: 100, color: C.amber },
-        { label: 'Mechanic Payouts', value: formatUGX(s.paidToMechanics), pct: payoutPct, color: C.red },
-        { label: 'Net Profit Margin', value: `${profitPct}%`, pct: profitPct, color: C.purple },
+        { label: 'Paid fees', value: formatUGX(s.revenueCollected), pct: 100, color: C.amber },
+        { label: 'Owed fees', value: formatUGX(s.pendingCollections), pct: 0, color: '#f59e0b' },
       ],
-      footer: `MOTOFIX retains ${profitPct}% of all processed revenue.`,
+      footer: 'Driver payments to mechanics happen off-platform and are not included.',
     },
   };
 

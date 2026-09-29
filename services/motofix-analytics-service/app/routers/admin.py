@@ -7,15 +7,55 @@
 # It reads from two databases: get_db (this service's data) and get_auth_db (the
 # auth service's users/mechanics), so it can join the full picture together.
 
+import logging
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional, List
 from datetime import datetime
 from pydantic import BaseModel, Field
 
+logger = logging.getLogger(__name__)
+
 from ..deps import verify_admin_token
 from ..db import get_db, get_auth_db
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
+
+_PAYMENT_STATUS_ALIASES = {
+    "success": "success",
+    "successful": "success",
+    "cash": "cash",
+    "pending": "pending",
+    "initiated": "initiated",
+    "processing": "initiated",
+    "failed": "failed",
+    "failure": "failed",
+    "declined": "failed",
+    "rejected": "failed",
+    "expired": "failed",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+}
+_PAYMENT_STATUS_VALUES = {
+    "success": ["success", "successful"],
+    "cash": ["cash"],
+    "pending": ["pending"],
+    "initiated": ["initiated", "processing"],
+    "failed": ["failed", "failure", "declined", "rejected", "expired"],
+    "cancelled": ["cancelled", "canceled"],
+}
+
+
+def _normalise_payment_status(value: Optional[str]) -> str:
+    """Return success | pending | failed | initiated | cash | cancelled | unknown."""
+    normalized = (value or "").strip().lower()
+    return _PAYMENT_STATUS_ALIASES.get(normalized, "pending" if not normalized else "unknown")
+
+
+def _payment_status_filter_values(value: str) -> list[str]:
+    normalized = _normalise_payment_status(value)
+    if normalized == "unknown":
+        raise HTTPException(status_code=422, detail="Unsupported payment status filter")
+    return _PAYMENT_STATUS_VALUES[normalized]
 
 
 # ──────────────────────────── MODELS ────────────────────────────
@@ -58,22 +98,6 @@ def _minutes_between(a: Optional[datetime], b: Optional[datetime]) -> Optional[i
         return max(0, mins)
     except Exception:
         return None
-
-
-class MechanicCreate(BaseModel):
-    phone: str
-    name: str
-    location: Optional[str] = None
-    is_verified: bool = False
-
-
-class MechanicUpdate(BaseModel):
-    phone: Optional[str] = None
-    name: Optional[str] = None
-    location: Optional[str] = None
-    is_verified: Optional[bool] = None
-    rating: Optional[int] = None
-    jobs_completed: Optional[int] = None
 
 
 # ────────────────────────── SERVICE REQUESTS ──────────────────────────
@@ -153,22 +177,25 @@ async def list_mechanics(
     if search:
         like_term = f"%{search.lower()}%"
         conditions.append(
-            f"(lower(name) LIKE ${len(params) + 1} OR lower(phone) LIKE ${len(params) + 1} OR lower(location) LIKE ${len(params) + 1})"
+            f"(lower(full_name) LIKE ${len(params) + 1} OR lower(phone) LIKE ${len(params) + 1} OR lower(location) LIKE ${len(params) + 1})"
         )
         params.append(like_term)
 
     where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
 
-    total = await db.fetchval(f"SELECT COUNT(*) FROM mechanics{where_sql}", *params)
-
-    query = f"""
-        SELECT id, phone, name, location, is_verified, is_available, rating, jobs_completed, created_at
-        FROM mechanics
-        {where_sql}
-        ORDER BY created_at DESC
-        LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
-    """
-    rows = await db.fetch(query, *params, pageSize, offset)
+    try:
+        total = await db.fetchval(f"SELECT COUNT(*) FROM mechanics{where_sql}", *params)
+        query = f"""
+            SELECT id, phone, full_name AS name, location, is_verified, is_available, rating, jobs_completed, created_at
+            FROM mechanics
+            {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}
+        """
+        rows = await db.fetch(query, *params, pageSize, offset)
+    except Exception as exc:
+        logger.exception("Admin mechanics list query failed")
+        raise HTTPException(status_code=503, detail="Mechanics data is temporarily unavailable") from exc
 
     data = [dict(r) for r in rows]
     return {
@@ -178,181 +205,6 @@ async def list_mechanics(
         "total": total,
         "totalPages": (total + pageSize - 1) // pageSize if total is not None else 0,
     }
-
-
-@router.post("/mechanics")
-async def add_mechanic(
-    mechanic: MechanicCreate,
-    db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token)
-):
-    # Normalize phone
-    phone = mechanic.phone.strip().replace(" ", "").replace("-", "")
-    if phone.startswith("0"):
-        phone = "+256" + phone[1:]
-    elif not phone.startswith("+"):
-        phone = "+256" + phone
-
-    query = """
-        INSERT INTO mechanics (phone, name, location, is_verified, rating, jobs_completed)
-        VALUES ($1, $2, $3, $4, 0, 0)
-        RETURNING *
-    """
-
-    result = await db.fetchrow(
-        query,
-        phone,
-        mechanic.name,
-        mechanic.location,
-        mechanic.is_verified
-    )
-
-    return dict(result)
-
-
-@router.patch("/mechanics/{mechanic_id}")
-async def update_mechanic(
-    mechanic_id: int,
-    updates: MechanicUpdate,
-    db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token)
-):
-    update_data = updates.dict(exclude_unset=True)
-
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No valid fields to update")
-
-    # Build dynamic SQL
-    set_parts = []
-    params = []
-
-    for idx, (key, value) in enumerate(update_data.items(), start=1):
-        set_parts.append(f"{key} = ${idx}")
-        params.append(value)
-
-    params.append(mechanic_id)
-
-    query = f"""
-        UPDATE mechanics
-        SET {', '.join(set_parts)}
-        WHERE id = ${len(params)}
-        RETURNING *
-    """
-
-    result = await db.fetchrow(query, *params)
-
-    if not result:
-        raise HTTPException(status_code=404, detail="Mechanic not found")
-
-    return dict(result)
-
-
-@router.delete("/mechanics/{mechanic_id}")
-async def delete_mechanic(
-    mechanic_id: int,
-    db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token)
-):
-    result = await db.fetchval("DELETE FROM mechanics WHERE id = $1 RETURNING id", mechanic_id)
-
-    if not result:
-        raise HTTPException(status_code=404, detail="Mechanic not found")
-
-    return {"detail": "Mechanic deleted successfully"}
-
-
-# ───────────────────────────── TOWING PROVIDERS ──────────────────────────────
-
-class TowingProviderUpdate(BaseModel):
-    name: Optional[str] = None
-    phone: Optional[str] = None
-    location: Optional[str] = None
-    is_verified: Optional[bool] = None
-
-
-@router.get("/towing-providers")
-async def list_towing_providers(
-    verified: Optional[bool] = Query(None),
-    search: Optional[str] = Query(None),
-    page: int = Query(1, ge=1),
-    pageSize: int = Query(10, ge=1, le=200),
-    db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token),
-):
-    offset = (page - 1) * pageSize
-    params: list = []
-    conditions: list = []
-
-    if verified is not None:
-        conditions.append(f"is_verified = ${len(params) + 1}")
-        params.append(verified)
-
-    if search:
-        like_term = f"%{search.lower()}%"
-        conditions.append(
-            f"(lower(full_name) LIKE ${len(params) + 1} OR lower(phone) LIKE ${len(params) + 1} OR lower(location) LIKE ${len(params) + 1})"
-        )
-        params.append(like_term)
-
-    where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
-    total = await db.fetchval(f"SELECT COUNT(*) FROM towing_providers{where_sql}", *params)
-
-    rows = await db.fetch(
-        f"""SELECT id, phone, full_name AS name, location, is_verified, is_available, rating, jobs_completed, spn, created_at
-            FROM towing_providers{where_sql}
-            ORDER BY created_at DESC
-            LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}""",
-        *params, pageSize, offset,
-    )
-
-    return {
-        "data": [dict(r) for r in rows],
-        "page": page,
-        "pageSize": pageSize,
-        "total": total,
-        "totalPages": max(1, (total + pageSize - 1) // pageSize) if total else 1,
-    }
-
-
-@router.patch("/towing-providers/{provider_id}")
-async def update_towing_provider(
-    provider_id: int,
-    updates: TowingProviderUpdate,
-    db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token),
-):
-    update_data = updates.dict(exclude_unset=True)
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No fields to update")
-
-    set_parts: list = []
-    params: list = []
-    for key, val in update_data.items():
-        col = "full_name" if key == "name" else key
-        set_parts.append(f"{col} = ${len(params) + 1}")
-        params.append(val)
-
-    params.append(provider_id)
-    row = await db.fetchrow(
-        f"UPDATE towing_providers SET {', '.join(set_parts)} WHERE id = ${len(params)} "
-        f"RETURNING id, phone, full_name AS name, location, is_verified, is_available, spn, created_at",
-        *params,
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Towing provider not found")
-    return dict(row)
-
-
-@router.delete("/towing-providers/{provider_id}")
-async def delete_towing_provider(
-    provider_id: int,
-    db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token),
-):
-    result = await db.fetchval("DELETE FROM towing_providers WHERE id = $1 RETURNING id", provider_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Towing provider not found")
-    return {"detail": "Towing provider deleted successfully"}
 
 
 # ───────────────────────────── PAYMENTS WITH PAGINATION ───────────────────────────────
@@ -365,6 +217,7 @@ async def list_payments(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     db=Depends(get_db),
+    auth_db=Depends(get_auth_db),
     admin=Depends(verify_admin_token)
 ):
     offset = (page - 1) * page_size
@@ -379,51 +232,61 @@ async def list_payments(
         params.append(like)
 
     if collection_status:
-        conditions.append(f"p.collection_status = ${len(params)+1}")
-        params.append(collection_status)
+        conditions.append(f"LOWER(COALESCE(p.collection_status, '')) = ANY(${len(params)+1}::text[])")
+        params.append(_payment_status_filter_values(collection_status))
 
     if disbursement_status:
-        conditions.append(f"p.disbursement_status = ${len(params)+1}")
-        params.append(disbursement_status)
+        conditions.append(f"LOWER(COALESCE(p.disbursement_status, '')) = ANY(${len(params)+1}::text[])")
+        params.append(_payment_status_filter_values(disbursement_status))
 
     where_sql = " WHERE " + " AND ".join(conditions) if conditions else ""
-
-    # Use LEFT JOIN mechanics only if the table exists (motofix_dispatch may not have it)
-    try:
-        await db.fetchval("SELECT 1 FROM mechanics LIMIT 1")
-        mech_join = "LEFT JOIN mechanics m ON p.mechanic_id = m.id"
-        mech_select = "m.name AS mechanic_name"
-    except Exception:
-        mech_join = ""
-        mech_select = "NULL::text AS mechanic_name"
 
     base_from = f"""
         FROM payments p
         JOIN service_requests sr ON p.request_id = sr.id
-        {mech_join}
     """
 
-    total = await db.fetchval(
-        f"SELECT COUNT(*) {base_from}{where_sql}", *params
-    )
+    try:
+        total = await db.fetchval(f"SELECT COUNT(*) {base_from}{where_sql}", *params)
+        query = f"""
+            SELECT p.id, p.request_id, p.quoted_amount, p.commission, p.mechanic_payout,
+                   p.collection_status, p.disbursement_status, p.provider,
+                   p.collection_reference, p.disbursement_reference, p.created_at,
+                   sr.customer_name, sr.phone AS driver_phone, sr.service_type,
+                   NULL::text AS mechanic_name, p.mechanic_id
+            {base_from}
+            {where_sql}
+            ORDER BY p.created_at DESC
+            LIMIT ${len(params)+1} OFFSET ${len(params)+2}
+        """
+        rows = await db.fetch(query, *params, page_size, offset)
+    except Exception as exc:
+        logger.exception("Payment records query failed")
+        raise HTTPException(status_code=503, detail="Payment records are temporarily unavailable") from exc
 
-    query = f"""
-        SELECT p.id, p.request_id, p.quoted_amount, p.commission, p.mechanic_payout,
-               p.collection_status, p.disbursement_status, p.provider,
-               p.collection_reference, p.disbursement_reference, p.created_at,
-               sr.customer_name, sr.phone AS driver_phone, sr.service_type,
-               {mech_select}, p.mechanic_id
-        {base_from}
-        {where_sql}
-        ORDER BY p.created_at DESC
-        LIMIT ${len(params)+1} OFFSET ${len(params)+2}
-    """
+    mechanic_ids = list({row["mechanic_id"] for row in rows if row["mechanic_id"] is not None})
+    mechanic_names = {}
+    if mechanic_ids:
+        try:
+            name_rows = await auth_db.fetch(
+                "SELECT id, full_name FROM mechanics WHERE id = ANY($1::int[])", mechanic_ids
+            )
+            mechanic_names = {row["id"]: row["full_name"] for row in name_rows}
+        except Exception as exc:
+            logger.exception("Payment mechanic-name lookup failed")
+            raise HTTPException(status_code=503, detail="Payment provider data is temporarily unavailable") from exc
 
-    params.extend([page_size, offset])
-    rows = await db.fetch(query, *params)
+    # Boundary vocabulary: success | pending | failed | initiated | cash | cancelled.
+    data = []
+    for row in rows:
+        payment = dict(row)
+        payment["mechanic_name"] = mechanic_names.get(payment["mechanic_id"])
+        payment["collection_status"] = _normalise_payment_status(payment["collection_status"])
+        payment["disbursement_status"] = _normalise_payment_status(payment["disbursement_status"])
+        data.append(payment)
 
     return {
-        "data": [dict(r) for r in rows],
+        "data": data,
         "pagination": {
             "page": page,
             "page_size": page_size,
@@ -444,39 +307,44 @@ async def live_stats(
     auth_db=Depends(get_auth_db),
     admin=Depends(verify_admin_token)
 ):
-    active_requests = await db.fetchval(
-        "SELECT COUNT(*) FROM service_requests WHERE status NOT IN ('completed', 'cancelled')"
-    ) or 0
-    stuck_requests = await db.fetchval(
-        "SELECT COUNT(*) FROM service_requests WHERE status = 'pending' AND created_at < NOW() - INTERVAL '15 minutes'"
-    ) or 0
-    requests_today = await db.fetchval(
-        "SELECT COUNT(*) FROM service_requests WHERE created_at >= CURRENT_DATE"
-    ) or 0
-    completed_today = await db.fetchval(
-        "SELECT COUNT(*) FROM service_requests WHERE status = 'completed' AND created_at >= CURRENT_DATE"
-    ) or 0
-    completion_rate_today = round(completed_today / requests_today * 100, 1) if requests_today > 0 else 0.0
+    try:
+        active_requests = await db.fetchval(
+            "SELECT COUNT(*) FROM service_requests WHERE status NOT IN ('completed', 'cancelled')"
+        ) or 0
+        stuck_requests = await db.fetchval(
+            "SELECT COUNT(*) FROM service_requests WHERE status = 'pending' AND created_at < NOW() - INTERVAL '15 minutes'"
+        ) or 0
+        requests_today = await db.fetchval(
+            "SELECT COUNT(*) FROM service_requests WHERE created_at >= CURRENT_DATE"
+        ) or 0
+        completed_created_today = await db.fetchval(
+            "SELECT COUNT(*) FROM service_requests WHERE status = 'completed' AND created_at >= CURRENT_DATE"
+        ) or 0
+    except Exception as exc:
+        logger.exception("Live request stats query failed")
+        raise HTTPException(status_code=503, detail="Live request statistics are temporarily unavailable") from exc
+
+    completion_rate_created_today = round(
+        completed_created_today / requests_today * 100, 1
+    ) if requests_today > 0 else 0.0
 
     try:
         towing_online = await auth_db.fetchval(
             "SELECT COUNT(*) FROM towing_providers WHERE is_available = true"
         ) or 0
-    except Exception:
-        towing_online = 0
-    try:
         mechanics_online = await auth_db.fetchval(
             "SELECT COUNT(*) FROM mechanics WHERE is_available = true"
         ) or 0
-    except Exception:
-        mechanics_online = 0
+    except Exception as exc:
+        logger.exception("Live provider stats query failed")
+        raise HTTPException(status_code=503, detail="Live provider statistics are temporarily unavailable") from exc
 
     return {
         "active_requests": active_requests,
         "stuck_requests": stuck_requests,
         "requests_today": requests_today,
-        "completed_today": completed_today,
-        "completion_rate_today": completion_rate_today,
+        "completed_requests_created_today": completed_created_today,
+        "completion_rate_created_today": completion_rate_created_today,
         "towing_online": towing_online,
         "mechanics_online": mechanics_online,
         "as_of": datetime.utcnow().isoformat() + "Z",
@@ -493,12 +361,13 @@ async def map_data(
 ):
     try:
         mechanic_rows = await auth_db.fetch(
-            """SELECT id, name, phone, location, is_verified, latitude, longitude
+            """SELECT id, full_name AS name, phone, location, is_verified, latitude, longitude
                FROM mechanics
                WHERE latitude IS NOT NULL AND longitude IS NOT NULL"""
         )
-    except Exception:
-        mechanic_rows = []
+    except Exception as exc:
+        logger.exception("Mechanics hotspot query failed")
+        raise HTTPException(status_code=503, detail="Mechanics map data unavailable") from exc
 
     try:
         towing_rows = await auth_db.fetch(
@@ -506,21 +375,25 @@ async def map_data(
                FROM towing_providers
                WHERE latitude IS NOT NULL AND longitude IS NOT NULL"""
         )
-    except Exception:
-        towing_rows = []
+    except Exception as exc:
+        logger.exception("Towing providers map query failed")
+        raise HTTPException(status_code=503, detail="Towing provider map data unavailable") from exc
 
-    request_rows = await db.fetch(
-        """SELECT id, customer_name, location, status, service_type, created_at
-           FROM service_requests
-           WHERE status NOT IN ('completed', 'cancelled')
-           ORDER BY created_at DESC
-           LIMIT 50"""
-    )
-
+    try:
+        request_rows = await db.fetch(
+            """SELECT id, customer_name, location, status, service_type, created_at
+               FROM service_requests
+               WHERE status NOT IN ('completed', 'cancelled')
+               ORDER BY created_at DESC
+               LIMIT 50"""
+        )
+    except Exception as exc:
+        logger.exception("Active-request map query failed")
+        raise HTTPException(status_code=503, detail="Active request map data unavailable") from exc
     return {
-        "mechanics": [dict(r) for r in mechanic_rows],
-        "towing_providers": [dict(r) for r in towing_rows],
-        "active_requests": [dict(r) for r in request_rows],
+        "mechanics": [dict(row) for row in mechanic_rows],
+        "towing_providers": [dict(row) for row in towing_rows],
+        "active_requests": [dict(row) for row in request_rows],
     }
 
 
@@ -530,179 +403,68 @@ async def map_data(
 async def dashboard_stats(
     db=Depends(get_db),
     auth_db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token)
+    admin=Depends(verify_admin_token),
 ):
-    stats = {}
-
-    stats["total_requests"] = await db.fetchval("SELECT COUNT(*) FROM service_requests") or 0
-    stats["completed_jobs"] = await db.fetchval(
-        "SELECT COUNT(*) FROM service_requests WHERE status = 'completed'"
-    ) or 0
-    stats["pending_jobs"] = await db.fetchval(
-        "SELECT COUNT(*) FROM service_requests WHERE status IN ('pending', 'accepted')"
-    ) or 0
-
     try:
-        stats["total_mechanics"] = await auth_db.fetchval("SELECT COUNT(*) FROM mechanics") or 0
-        stats["verified_mechanics"] = await auth_db.fetchval(
-            "SELECT COUNT(*) FROM mechanics WHERE is_verified = true"
-        ) or 0
-    except Exception:
-        stats["total_mechanics"] = 0
-        stats["verified_mechanics"] = 0
+        stats = {
+            "total_requests": await db.fetchval("SELECT COUNT(*) FROM service_requests") or 0,
+            "completed_jobs": await db.fetchval("SELECT COUNT(*) FROM service_requests WHERE status = 'completed'") or 0,
+            "pending_jobs": await db.fetchval("SELECT COUNT(*) FROM service_requests WHERE status IN ('pending', 'accepted')") or 0,
+            "total_mechanics": await auth_db.fetchval("SELECT COUNT(*) FROM mechanics") or 0,
+            "verified_mechanics": await auth_db.fetchval("SELECT COUNT(*) FROM mechanics WHERE is_verified = true") or 0,
+        }
+        # platform_fees is Motofix's revenue ledger; payments holds job-level quotes and collections.
+        collected = await db.fetchval("SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'paid'")
+        pending = await db.fetchval("SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'owed'")
+        stats["revenue_collected_ugx"] = float(collected or 0)
+        stats["pending_collections_ugx"] = float(pending or 0)
+        stats["total_transactions"] = await db.fetchval("SELECT COUNT(*) FROM payments") or 0
+        stats["as_of"] = datetime.utcnow().isoformat() + "Z"
+        return stats
+    except Exception as exc:
+        logger.exception("Admin dashboard stats query failed")
+        raise HTTPException(status_code=503, detail="Dashboard statistics are temporarily unavailable") from exc
 
-    # MOTOFIX's revenue is the flat platform fee per completed job (the `platform_fees`
-    # ledger), NOT the old driver-payment/commission model. These mirror the mechanic
-    # app's Fees tab: a 'paid' fee = revenue collected; an 'owed' fee = still outstanding.
-    collected = await db.fetchval(
-        "SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'paid'"
-    )
-    pending = await db.fetchval(
-        "SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'owed'"
-    )
-
-    stats["revenue_collected_ugx"] = float(collected or 0)
-    # The platform doesn't pay mechanics — drivers pay them directly, off-platform — so the
-    # flat fee is pure platform revenue: payout is 0 and profit equals revenue.
-    stats["paid_to_mechanics_ugx"] = 0.0
-    stats["profit_ugx"] = float(collected or 0)
-    stats["total_transactions"] = await db.fetchval(
-        "SELECT COUNT(*) FROM platform_fees WHERE status = 'paid'"
-    ) or 0
-    # The 10k/job fee IS the commission, so collected commission == revenue collected.
-    stats["commission_earned_ugx"] = float(collected or 0)
-    stats["pending_collections_ugx"] = float(pending or 0)
-
-    stats["as_of"] = datetime.utcnow().isoformat() + "Z"
-    stats["motofix_is_unstoppable"] = True
-
-    return stats
-
-
-# ───────────────────────────── REVENUE CHART ─────────────────────────────
 
 @router.get("/dashboard/revenue-chart")
-async def revenue_chart(
-    limit: int = 30,
-    db=Depends(get_db),
-    admin=Depends(verify_admin_token)
-):
-    # Revenue over time = platform fees actually collected (paid), by the day they were
-    # settled — same source as the dashboard's revenue total, so the chart stays in sync.
+async def revenue_chart(limit: int = 30, db=Depends(get_db), admin=Depends(verify_admin_token)):
     query = """
         SELECT to_char(COALESCE(paid_at, created_at)::date, 'YYYY-MM-DD') AS date,
                COALESCE(SUM(amount), 0) AS amount
-        FROM platform_fees
-        WHERE status = 'paid'
-        GROUP BY date
-        ORDER BY date DESC
-        LIMIT $1
-    """
-
-    rows = await db.fetch(query, limit)
-
-    data = [
-        {"date": r["date"], "amount": float(r["amount"])}
-        for r in rows
-    ]
-
-    return list(reversed(data))
-
-
-# ─────────────── MECHANIC VERIFICATION WORKFLOW ───────────────
-
-class VerifyDecision(BaseModel):
-    is_verified: bool
-    reason: Optional[str] = None          # e.g. "Documents verified" or "Incomplete submission"
-
-
-@router.patch("/mechanics/{mechanic_id}/verify")
-async def verify_mechanic(
-    mechanic_id: int,
-    decision: VerifyDecision,
-    db=Depends(get_auth_db),
-    admin=Depends(verify_admin_token),
-):
-    """
-    Admin grants or revokes mechanic verification.
-    Sets is_verified on the mechanics table and writes a system_log entry.
+        FROM platform_fees WHERE status = 'paid'
+        GROUP BY date ORDER BY date DESC LIMIT $1
     """
     try:
-        row = await db.fetchrow(
-            "UPDATE mechanics SET is_verified = $1 WHERE id = $2 RETURNING *",
-            decision.is_verified, mechanic_id,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Mechanics table not available in this DB: {e}")
-    if not row:
-        raise HTTPException(status_code=404, detail="Mechanic not found")
-
-    action = "MECHANIC_VERIFIED" if decision.is_verified else "MECHANIC_UNVERIFIED"
-    admin_id = admin.get("sub") or admin.get("id") or "admin"
-
-    # Write system log (best-effort)
-    try:
-        await db.execute(
-            """
-            INSERT INTO system_logs (actor_id, actor_role, action, target_id, target_type, detail, created_at)
-            VALUES ($1, 'admin', $2, $3, 'mechanic', $4, NOW())
-            """,
-            str(admin_id), action, mechanic_id,
-            decision.reason or ("Verified" if decision.is_verified else "Unverified"),
-        )
-    except Exception as e:
-        # system_logs table may not exist yet; non-fatal
-        pass
-
-    return {
-        "mechanic_id": mechanic_id,
-        "is_verified": decision.is_verified,
-        "reason": decision.reason,
-        "mechanic": dict(row),
-    }
+        rows = await db.fetch(query, limit)
+    except Exception as exc:
+        logger.exception("Revenue chart query failed")
+        raise HTTPException(status_code=503, detail="Revenue chart is temporarily unavailable") from exc
+    return list(reversed([{"date": row["date"], "amount": float(row["amount"])} for row in rows]))
 
 
 @router.get("/mechanics/{mechanic_id}/reviews")
-async def mechanic_reviews(
-    mechanic_id: int,
-    limit: int = 50,
-    db=Depends(get_db),           # reviews + service_requests live in requests DB
-    admin=Depends(verify_admin_token),
-):
-    """Admin view of all reviews for a mechanic with rating summary."""
-    rows = await db.fetch(
-        """
-        SELECT r.id, r.request_id, r.rating, r.comment, r.created_at,
-               sr.customer_name, sr.service_type, sr.location
-        FROM reviews r
-        JOIN service_requests sr ON sr.id = r.request_id
-        WHERE r.mechanic_id = $1
-        ORDER BY r.created_at DESC
-        LIMIT $2
-        """,
-        mechanic_id, limit,
-    )
-    total = await db.fetchval("SELECT COUNT(*) FROM reviews WHERE mechanic_id = $1", mechanic_id)
-    avg = await db.fetchval(
-        "SELECT AVG(rating)::NUMERIC(3,2) FROM reviews WHERE mechanic_id = $1", mechanic_id
-    )
-
+async def mechanic_reviews(mechanic_id: int, limit: int = 50, db=Depends(get_db), admin=Depends(verify_admin_token)):
+    try:
+        rows = await db.fetch(
+            """SELECT r.id, r.request_id, r.rating, r.comment, r.created_at,
+                      sr.customer_name, sr.service_type, sr.location
+               FROM reviews r JOIN service_requests sr ON sr.id = r.request_id
+               WHERE r.mechanic_id = $1 ORDER BY r.created_at DESC LIMIT $2""",
+            mechanic_id, limit,
+        )
+        total = await db.fetchval("SELECT COUNT(*) FROM reviews WHERE mechanic_id = $1", mechanic_id)
+        avg = await db.fetchval("SELECT AVG(rating)::NUMERIC(3,2) FROM reviews WHERE mechanic_id = $1", mechanic_id)
+    except Exception as exc:
+        logger.exception("Mechanic reviews query failed")
+        raise HTTPException(status_code=503, detail="Mechanic reviews are temporarily unavailable") from exc
     reviews = []
-    for r in rows:
-        rv = dict(r)
-        if rv.get("created_at"):
-            rv["created_at"] = rv["created_at"].isoformat()
-        reviews.append(rv)
+    for row in rows:
+        review = dict(row)
+        if review.get("created_at"):
+            review["created_at"] = review["created_at"].isoformat()
+        reviews.append(review)
+    return {"mechanic_id": mechanic_id, "total_reviews": total or 0, "average_rating": float(avg) if avg else None, "reviews": reviews}
 
-    return {
-        "mechanic_id": mechanic_id,
-        "total_reviews": total or 0,
-        "average_rating": float(avg) if avg else None,
-        "reviews": reviews,
-    }
-
-
-# ─────────────── SYSTEM LOGS (Compliance) ───────────────
 
 class SystemLogOut(BaseModel):
     id: int
@@ -716,40 +478,29 @@ class SystemLogOut(BaseModel):
 
 
 async def _ensure_system_logs(db):
-    """Create system_logs table if it doesn't exist (idempotent)."""
     await db.execute("""
         CREATE TABLE IF NOT EXISTS system_logs (
-            id          SERIAL PRIMARY KEY,
-            actor_id    TEXT NOT NULL,
-            actor_role  TEXT NOT NULL DEFAULT 'system',
-            action      TEXT NOT NULL,
-            target_id   INTEGER,
-            target_type TEXT,
-            detail      TEXT,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            id SERIAL PRIMARY KEY, actor_id TEXT NOT NULL,
+            actor_role TEXT NOT NULL DEFAULT 'system', action TEXT NOT NULL,
+            target_id INTEGER, target_type TEXT, detail TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """)
 
 
 @router.get("/logs", tags=["Compliance"])
 async def list_system_logs(
-    action: Optional[str] = Query(None, description="Filter by action type"),
-    actor_role: Optional[str] = Query(None, description="Filter by actor role"),
-    target_type: Optional[str] = Query(None, description="Filter by target type"),
+    action: Optional[str] = Query(None),
+    actor_role: Optional[str] = Query(None),
+    target_type: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     db=Depends(get_db),
     admin=Depends(verify_admin_token),
 ):
-    """
-    Compliance audit log — all significant system actions.
-    Required for Uganda Data Protection & Privacy Act (2019) compliance.
-    """
     await _ensure_system_logs(db)
-
     conditions = []
     params = []
-
     if action:
         conditions.append(f"action = ${len(params)+1}")
         params.append(action)
@@ -759,7 +510,6 @@ async def list_system_logs(
     if target_type:
         conditions.append(f"target_type = ${len(params)+1}")
         params.append(target_type)
-
     where_sql = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     total = await db.fetchval(f"SELECT COUNT(*) FROM system_logs {where_sql}", *params)
@@ -819,6 +569,7 @@ async def write_system_log(
 @router.get("/compliance/report", tags=["Compliance"])
 async def compliance_report(
     db=Depends(get_db),
+    auth_db=Depends(get_auth_db),
     admin=Depends(verify_admin_token),
 ):
     """
@@ -834,16 +585,22 @@ async def compliance_report(
     cancelled = await db.fetchval(
         "SELECT COUNT(*) FROM service_requests WHERE status = 'cancelled'"
     ) or 0
-    total_mechanics = await db.fetchval("SELECT COUNT(*) FROM mechanics") or 0
-    verified_mechanics = await db.fetchval(
+    total_mechanics = await auth_db.fetchval("SELECT COUNT(*) FROM mechanics") or 0
+    verified_mechanics = await auth_db.fetchval(
         "SELECT COUNT(*) FROM mechanics WHERE is_verified = true"
     ) or 0
     total_payments = await db.fetchval("SELECT COUNT(*) FROM payments") or 0
-    collected_ugx = await db.fetchval(
+    job_collected_ugx = await db.fetchval(
         "SELECT COALESCE(SUM(quoted_amount), 0) FROM payments WHERE collection_status IN ('success','successful','cash')"
     ) or 0
-    disbursed_ugx = await db.fetchval(
-        "SELECT COALESCE(SUM(mechanic_payout), 0) FROM payments WHERE disbursement_status = 'pending'"
+    job_payouts_ugx = await db.fetchval(
+        "SELECT COALESCE(SUM(mechanic_payout), 0) FROM payments WHERE disbursement_status = 'successful'"
+    ) or 0
+    fees_collected_ugx = await db.fetchval(
+        "SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'paid'"
+    ) or 0
+    fees_owed_ugx = await db.fetchval(
+        "SELECT COALESCE(SUM(amount), 0) FROM platform_fees WHERE status = 'owed'"
     ) or 0
 
     # Verification events in the last 30 days
@@ -869,11 +626,14 @@ async def compliance_report(
             "unverified": total_mechanics - verified_mechanics,
             "verification_events_last_30d": verifications_30d,
         },
-        "payments": {
-            "total_transactions": total_payments,
-            "total_collected_ugx": float(collected_ugx),
-            "total_disbursed_ugx": float(disbursed_ugx),
-            "platform_revenue_ugx": float(collected_ugx) - float(disbursed_ugx),
+        "job_payment_records": {
+            "total_records": total_payments,
+            "quoted_amounts_collected_ugx": float(job_collected_ugx),
+            "mechanic_payouts_recorded_ugx": float(job_payouts_ugx),
+        },
+        "platform_fees": {
+            "collected_ugx": float(fees_collected_ugx),
+            "outstanding_ugx": float(fees_owed_ugx),
         },
         "compliance_framework": "Uganda Data Protection and Privacy Act (2019)",
         "reporting_entities": ["KCCA", "UNRA"],
@@ -914,6 +674,11 @@ async def list_subscriptions(
     admin=Depends(verify_admin_token),
 ):
     """List mechanic subscriptions with optional status filter."""
+    if os.getenv("ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS", "").lower() != "true":
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy subscription routes are disabled by default. Set ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS=true to enable them.",
+        )
     offset = (page - 1) * pageSize
     conditions = []
     params: list = []
@@ -956,6 +721,11 @@ async def record_subscription_payment(
     Admin records a bank-transfer subscription payment for a mechanic.
     Activates or renews the subscription for one calendar month.
     """
+    if os.getenv("ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS", "").lower() != "true":
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy subscription routes are disabled by default. Set ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS=true to enable them.",
+        )
     from datetime import timezone, timedelta
 
     now = datetime.utcnow().replace(tzinfo=timezone.utc)
@@ -1005,6 +775,11 @@ async def get_subscription(
     admin=Depends(verify_admin_token),
 ):
     """Get the current subscription state for a mechanic."""
+    if os.getenv("ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS", "").lower() != "true":
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy subscription routes are disabled by default. Set ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS=true to enable them.",
+        )
     row = await db.fetchrow(
         "SELECT * FROM subscriptions WHERE mechanic_id = $1", mechanic_id
     )
@@ -1025,6 +800,11 @@ async def subscription_payment_history(
     admin=Depends(verify_admin_token),
 ):
     """Full payment history for a mechanic's subscription."""
+    if os.getenv("ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS", "").lower() != "true":
+        raise HTTPException(
+            status_code=410,
+            detail="Legacy subscription routes are disabled by default. Set ENABLE_LEGACY_SUBSCRIPTION_ENDPOINTS=true to enable them.",
+        )
     rows = await db.fetch(
         """SELECT * FROM subscription_payments WHERE mechanic_id = $1
            ORDER BY created_at DESC LIMIT $2""",
@@ -1079,8 +859,9 @@ async def admin_notifications(
                 ),
                 "created_at": r["created_at"].isoformat(),
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Recent service-request activity query failed")
+        raise HTTPException(status_code=503, detail="Recent activity is temporarily unavailable") from exc
 
     # ── Successful payments ──────────────────────────────────────────
     try:
@@ -1110,8 +891,9 @@ async def admin_notifications(
                 ),
                 "created_at": r["created_at"].isoformat(),
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Recent job-payment activity query failed")
+        raise HTTPException(status_code=503, detail="Recent activity is temporarily unavailable") from exc
 
     # ── Provider applications ────────────────────────────────────────
     try:
@@ -1139,8 +921,9 @@ async def admin_notifications(
                 ),
                 "created_at": ts.isoformat() if ts else datetime.utcnow().isoformat(),
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Provider-application activity query failed")
+        raise HTTPException(status_code=503, detail="Recent activity is temporarily unavailable") from exc
 
     # ── Driver registrations ─────────────────────────────────────────
     try:
@@ -1166,8 +949,9 @@ async def admin_notifications(
                 ),
                 "created_at": r["created_at"].isoformat(),
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Driver-registration activity query failed")
+        raise HTTPException(status_code=503, detail="Recent activity is temporarily unavailable") from exc
 
     # ── Platform-fee payments (a mechanic settled their owed balance) ─────────
     # Paid platform_fees rows live in the dispatch DB; group them into one event per
@@ -1197,15 +981,17 @@ async def admin_notifications(
         names: dict = {}
         if mech_ids:
             try:
-                for n in await auth_db.fetch("SELECT id, name FROM mechanics WHERE id = ANY($1::int[])", mech_ids):
-                    names[n["id"]] = n["name"]
-            except Exception:
-                pass
+                for n in await auth_db.fetch("SELECT id, full_name FROM mechanics WHERE id = ANY($1::int[])", mech_ids):
+                    names[n["id"]] = n["full_name"]
+            except Exception as exc:
+                logger.exception("Mechanic-name activity lookup failed")
+                raise HTTPException(status_code=503, detail="Recent activity provider data is unavailable") from exc
             try:
                 for t in await auth_db.fetch("SELECT id, full_name FROM towing_providers WHERE id = ANY($1::int[])", mech_ids):
                     names.setdefault(t["id"], t["full_name"])
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.exception("Towing-provider activity lookup failed")
+                raise HTTPException(status_code=503, detail="Recent activity provider data is unavailable") from exc
 
         for g in sorted(groups.values(), key=lambda x: x["paid_at"], reverse=True)[:10]:
             name = names.get(g["mechanic_id"]) or "A mechanic"
@@ -1223,8 +1009,9 @@ async def admin_notifications(
                 ),
                 "created_at": g["paid_at"].isoformat(),
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Platform-fee activity query failed")
+        raise HTTPException(status_code=503, detail="Recent activity is temporarily unavailable") from exc
 
     # ── Sort newest-first, cap at limit ─────────────────────────────
     events.sort(key=lambda x: x["created_at"], reverse=True)

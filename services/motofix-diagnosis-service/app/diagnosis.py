@@ -29,6 +29,7 @@ from anthropic import AsyncAnthropic
 from groq import AsyncGroq
 
 from .schemas import ChatMessage, ChatResponse, DiagnosisResult
+from .routing import apply_truthful_routing
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ def _diagnosis_fallback(image: bool = False) -> DiagnosisResult:
         fault_description=(
             "Could not analyse the image — please describe the fault in the chat."
             if image
-            else "Automatic classification unavailable — a mechanic will assess on arrival."
+            else "Automatic classification unavailable — a provider will assess on site and recommend a tow if roadside work is unsafe."
         ),
         provider_type="mechanic",
         severity="medium",
@@ -143,9 +144,12 @@ provider_type to "ambulance", and severity to "critical". Never recommend a
 towing_provider when people are hurt.
 
 Provider type rules:
-  mechanic           — standard repairs the vehicle can be driven to or the mechanic can reach
-  towing_provider    — vehicle cannot or should not be moved under its own power
-                       (e.g. engine seizure, serious accident, brake failure)
+    mechanic           — roadside assist / first aid: tyre puncture, battery jump, minor safe fix.
+                                             The mechanic triages on the road; do not promise a full repair there.
+    towing_provider    — vehicle cannot or should not be moved under its own power, or the fault
+                                             is complex/high-risk and belongs in a garage (e.g. engine seizure,
+                                             serious accident damage, brake failure, major overheating).
+                                             Recommend a tow to a proper garage or safer place when this is likely.
   spare_parts_dealer — driver needs a specific part and can install it themselves
   ambulance          — there are injured people, someone is bleeding, unconscious, or in medical
                        danger as a result of a road incident. ALWAYS use this when any person
@@ -154,8 +158,11 @@ Provider type rules:
 Severity rules:
   low      — cosmetic or convenience issue, not time-sensitive
   medium   — should be attended to within a few hours, minor safety concern
-  high     — needs attention immediately, significant safety risk if ignored
-  critical — dangerous, do not drive, require immediate towing
+    high     — needs attention immediately; prefer tow when roadside work may be unsafe
+    critical — dangerous, do not drive; require immediate tow (ambulance if anyone is hurt)
+
+Product promise: MOTOFIX gets the right help fast — fix it on the spot if safe and practical,
+or get the vehicle to a proper garage if it cannot be repaired safely on the road.
 
 Uganda context: most vehicles are boda-bodas (motorcycles), saloon cars, or minibus taxis (matatus).
 Common faults: tyre punctures, battery issues, overheating, fuel problems."""
@@ -265,9 +272,9 @@ TO GIVE THE FINAL DIAGNOSIS:
 }
 
 HOW MANY QUESTIONS:
-- Be THOROUGH. Ask between 5 and 8 questions before diagnosing — do NOT rush to a diagnosis after only 3-4 questions.
-- Only diagnose earlier than 5 questions if it is a clear emergency (see SAFETY) or the cause is already unmistakable.
-- After 8 questions you MUST give the diagnosis.
+- Ask at most 1–2 short questions when the safe route is ambiguous.
+- Ask first whether the vehicle can move safely; for serious smoke, brake failure, or accident damage, recommend a tow rather than prolonging triage.
+- Diagnose immediately when a classic first-aid fault is clear or there is an emergency.
 
 WHAT TO COVER (work through these progressively, one question each):
 1. The main symptom (what they notice).
@@ -289,6 +296,8 @@ HOW TO QUESTION WELL:
 SAFETY:
 - If any answer mentions injured people, blood, someone unconscious, or a medical emergency → immediately return done=true with fault_category "accident_with_casualties", provider_type "ambulance", severity "critical".
 - If the vehicle clearly cannot be driven safely (won't move, serious smoke, brake failure, accident) → provider_type "towing_provider".
+- A tyre puncture, dead battery/jump-start, or minor safe roadside fault → provider_type "mechanic".
+- State clearly whether the next step is "Roadside assist" or "Tow / recovery to a garage"; never promise a full roadside repair.
 
 CONTEXT: Most vehicles in Uganda are boda-bodas (motorcycles), saloon cars, matatus (minibuses), or lorries. Currency is UGX."""
 
@@ -314,7 +323,10 @@ async def guided_diagnose(answers: list, client: AsyncGroq) -> dict:
         max_tokens=800,
         response_format={"type": "json_object"},
     )
-    return json.loads(response.choices[0].message.content)
+    result = json.loads(response.choices[0].message.content)
+    if result.get("done") and isinstance(result.get("diagnosis"), dict):
+        result["diagnosis"] = apply_truthful_routing(result["diagnosis"])
+    return result
 
 
 _PARTS_PRICE_PROMPT = """You are MOTOBOT, MOTOFIX's friendly spare-parts pricing assistant for Uganda.
@@ -530,6 +542,8 @@ You may ONLY discuss topics that fall within the MOTOFIX platform context:
    - Requesting a mechanic, towing provider, or spare parts dealer via MOTOFIX.
    - On-road medical emergencies and ambulance dispatch through MOTOFIX.
    - Safety advice while waiting for help (e.g. hazard lights, safe distance from traffic).
+    - Be clear: roadside assist is first aid and triage; if the fault is complex or unsafe to repair on the road, recommend tow/recovery to a garage or safer place.
+    - Never promise that a mechanic will fully repair every problem at the driver's location.
 
 3. INSURANCE — MOTOFIX COVERAGE & CLAIMS
    - How MOTOFIX insurance coverage works for registered drivers.
@@ -633,7 +647,7 @@ async def diagnose_text(description: str, client: AsyncGroq | None = None) -> Di
             messages=[{"role": "user", "content": f"Vehicle fault report: {description}"}],
         )
         data = json.loads(_extract_json(_claude_text(resp)))
-        return DiagnosisResult(**data)
+        return DiagnosisResult(**apply_truthful_routing(data))
     except Exception as exc:
         logger.error("Claude text diagnosis failed: %s", exc)
         return _diagnosis_fallback()
@@ -717,7 +731,7 @@ async def diagnose_image(image_bytes: bytes, content_type: str, client: AsyncGro
             }],
         )
         data = json.loads(_extract_json(_claude_text(resp)))
-        result = DiagnosisResult(**data)
+        result = DiagnosisResult(**apply_truthful_routing(data))
         if result.image_relevant is None:
             result.image_relevant = True
         return result

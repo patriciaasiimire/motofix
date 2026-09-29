@@ -4,11 +4,15 @@
  */
 
 // Use environment variables, fallback to production URLs or same-origin proxy
+const ADMIN_API_URL = import.meta.env.VITE_API_ADMIN_URL || '';
+
+if (import.meta.env.PROD && !ADMIN_API_URL) {
+  throw new Error('Production build requires VITE_API_ADMIN_URL to be set for the admin portal.');
+}
+
 export const API_CONFIG = {
   // Admin Dashboard API (for stats, mechanics, payments, requests)
-  ADMIN_API_URL:
-    import.meta.env.VITE_API_ADMIN_URL ||
-    'https://motofix-admin-dashboard.onrender.com',
+  ADMIN_API_URL: ADMIN_API_URL || 'https://motofix-admin-dashboard.onrender.com',
 
   // Service Requests Microservice
   REQUESTS_API_URL:

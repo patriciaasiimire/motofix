@@ -49,7 +49,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SECRET_KEY = os.getenv("SECRET_KEY", "change_me_in_production")
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
@@ -60,6 +60,9 @@ groq_client: Optional[AsyncGroq] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global groq_client
+    if not SECRET_KEY:
+        logger.critical("Missing required SECRET_KEY environment variable for diagnosis-service")
+        raise RuntimeError("SECRET_KEY is required for diagnosis-service; set it in the environment before startup.")
     if GROQ_API_KEY:
         groq_client = AsyncGroq(api_key=GROQ_API_KEY)
         logger.info("Fault diagnosis service: Groq client ready (chat / guided / parts / fuel)")
@@ -152,6 +155,7 @@ async def health():
     return {
         "status": "ok",
         "service": "fault-diagnosis",
+        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
         "groq_configured": groq_client is not None,
         "claude_configured": bool(ANTHROPIC_API_KEY),
     }

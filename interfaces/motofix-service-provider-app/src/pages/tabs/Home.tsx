@@ -66,7 +66,7 @@ const TIPS = [
     color: '#A78BFA',
     steps: [
       'Before starting work, take photos of the vehicle from multiple angles to document its existing condition.',
-      'Ask the driver to confirm the fault description in the app chat before you begin any repairs.',
+      'Ask the driver to confirm the fault description in the app chat before you begin on-site assist.',
       'Log every part you replace in the job notes — part name, reason for replacement, and cost.',
       'If you find additional faults not in the original request, show the driver and get their approval in writing (app chat) before proceeding.',
       'Take a photo of the completed work and the vehicle in its repaired condition.',
@@ -97,10 +97,10 @@ const TIPS = [
     steps: [
       'Stay online during 7–9 AM and 5–8 PM peak hours — these windows generate 3× more requests.',
       'Maintain a rating above 4.5 stars. Drivers see your rating before accepting your quote, so quality is directly tied to income.',
-      'Respond to new requests within 2 minutes. Providers who respond fast get priority placement in driver searches.',
+      'Accept or decline each offer in MOTOFIX so the driver sees an accurate status and declined jobs can be reassigned.',
       'Keep your service area and location updated so nearby requests reach you first.',
       'Offer a brief diagnostic for free on simple faults — drivers will trust you and accept your quote faster.',
-      'Build repeat customers by saving their number and following up after a job. Word of mouth drives more bookings than anything else.',
+      'Use the in-app accept and completion steps to keep each job record and driver update accurate.',
       'Keep commonly needed parts (spark plugs, fuses, jump cables, tyre patch kits) in stock to handle jobs on the spot without delays.',
     ],
   },
@@ -229,7 +229,7 @@ export default function Home({
     { id: 'earnings', label: 'Earnings & Payments',   icon: Wallet,   color: '#4ADE80', desc: 'Track your income and payment history',          onClick: onGoToEarnings },
     { id: 'spareparts', label: 'Spare Parts & Tools', icon: Package,  color: '#A78BFA', desc: 'Browse & order genuine car parts',                   onClick: () => navigate('/spare-parts') },
   ] : [
-    { id: 'repairs',  label: 'Mechanical Repairs',    icon: Wrench,   color: '#F59E0B', desc: 'Engine · Tyres · Battery · Roadside repair',    onClick: () => setShowRepairsView(true) },
+    { id: 'repairs',  label: 'Mechanical Repairs',    icon: Wrench,   color: '#F59E0B', desc: 'Engine · Tyres · Battery · On-site assist',    onClick: () => setShowRepairsView(true) },
     { id: 'jobs',     label: 'Job Requests',          icon: Briefcase,color: '#60A5FA', desc: 'Browse and accept available requests nearby',    onClick: onGoToJobs     },
     { id: 'earnings', label: 'Earnings & Payments',   icon: Wallet,   color: '#4ADE80', desc: 'Track your income and payment history',          onClick: onGoToEarnings },
     { id: 'spareparts', label: 'Spare Parts & Tools', icon: Package,  color: '#A78BFA', desc: 'Browse & order genuine car parts',                   onClick: () => navigate('/spare-parts') },
@@ -259,7 +259,7 @@ export default function Home({
               ? '1 active job in progress'
               : pendingCount > 0
                 ? `${pendingCount} request${pendingCount > 1 ? 's' : ''} available near you`
-                : 'Roadside assistance · Repairs · Recovery — all in one place'}
+                : 'On-site assist · Tow to garage — try preferred helper first, else next available'}
           </p>
         </div>
 

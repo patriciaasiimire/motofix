@@ -215,6 +215,7 @@ export const requestsService = {
     service_type: string;
     location: string;
     description: string;
+    preferred_mechanic_id?: number;
   }) => requestsApi.post('/requests/', data),
   
   createWithMedia: (formData: FormData) => {
