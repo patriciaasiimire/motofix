@@ -127,18 +127,19 @@ async def register_provider(body: ProviderRegisterRequest, request: Request):
                             "status_code": 409},
                 )
 
+            service_area_ids = list(dict.fromkeys((body.service_area_ids or [])[:20]))
             row = await conn.fetchrow(
                 """
                 INSERT INTO mechanics
                     (full_name, phone, location, latitude, longitude, specialty,
-                     provider_type, vehicle_type, password_hash, is_verified,
-                     rating, total_ratings, jobs_completed, is_available, created_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,FALSE,0.0,0,0,FALSE,$10)
+                     provider_type, vehicle_type, service_area_ids, password_hash,
+                     is_verified, rating, total_ratings, jobs_completed, is_available, created_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,0.0,0,0,FALSE,$11)
                 RETURNING id
                 """,
                 body.full_name, body.phone, body.location,
                 body.latitude, body.longitude, body.specialty,
-                body.provider_type, body.vehicle_type,
+                body.provider_type, body.vehicle_type, service_area_ids,
                 password_hash, now,
             )
             provider_id = row["id"]
@@ -155,17 +156,18 @@ async def register_provider(body: ProviderRegisterRequest, request: Request):
                             "status_code": 409},
                 )
 
+            service_area_ids = list(dict.fromkeys((body.service_area_ids or [])[:20]))
             row = await conn.fetchrow(
                 """
                 INSERT INTO towing_providers
                     (full_name, phone, location, latitude, longitude,
-                     password_hash, is_verified, rating, total_ratings,
-                     jobs_completed, is_available, created_at)
-                VALUES ($1,$2,$3,$4,$5,$6,FALSE,0.0,0,0,FALSE,$7)
+                     service_area_ids, password_hash, is_verified, rating,
+                     total_ratings, jobs_completed, is_available, created_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,FALSE,0.0,0,0,FALSE,$8)
                 RETURNING id
                 """,
                 body.full_name, body.phone, body.location,
-                body.latitude, body.longitude,
+                body.latitude, body.longitude, service_area_ids,
                 password_hash, now,
             )
             provider_id = row["id"]

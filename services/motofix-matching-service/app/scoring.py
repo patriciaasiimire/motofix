@@ -23,6 +23,8 @@ import math
 import os
 from typing import Any, Dict, List, Optional
 
+from .areas import AREA_DEFAULT_RADIUS_KM, AREA_INDEX, normalize_service_area_ids, service_area_matches
+
 # ── Model feature importances (from the XGBoost-Monotonic matching model) ──────
 WEIGHT_SPEC_MATCH   = 0.3546
 WEIGHT_AVAILABILITY = 0.2978
@@ -199,6 +201,8 @@ def score_mechanic(
     service_type: str,
     excluded_ids: Optional[List[int]] = None,
     preferred_mechanic_id: Optional[int] = None,
+    area_id: Optional[str] = None,
+    include_neighbors: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """
     Score a single mechanic against a breakdown request.
@@ -210,22 +214,35 @@ def score_mechanic(
     if not mechanic.get("is_verified"):
         return None
 
-    # Accept both explicit is_available flag (if present) and absence of it
     if mechanic.get("is_available") is False:
+        return None
+
+    if area_id and not service_area_matches(mechanic, area_id, include_neighbors=include_neighbors):
         return None
 
     m_lat = mechanic.get("latitude")
     m_lon = mechanic.get("longitude")
-
-    if m_lat is None or m_lon is None:
-        distance_km = MAX_DISTANCE_KM  # treat missing location as max distance
+    if area_id and service_area_matches(mechanic, area_id, include_neighbors=include_neighbors):
+        area = AREA_INDEX.get(area_id)
+        # Area-based matching is the primary launch contract. For in-area mechanics,
+        # a missing or stale pin must not disqualify them; use the area centroid as the
+        # effective location so the candidate remains eligible and ranked by area fit.
+        if area:
+            distance_km = haversine_km(request_lat, request_lon, float(area["center_lat"]), float(area["center_lng"]))
+        else:
+            distance_km = 0.0
+        prox = _proximity_score(distance_km)
+    elif m_lat is None or m_lon is None:
+        if area_id is None:
+            return None
+        distance_km = min(float(AREA_DEFAULT_RADIUS_KM), float(MAX_DISTANCE_KM))
+        prox = 50.0
     else:
         distance_km = haversine_km(request_lat, request_lon, float(m_lat), float(m_lon))
+        if distance_km > MAX_DISTANCE_KM:
+            return None
+        prox = _proximity_score(distance_km)
 
-    if distance_km > MAX_DISTANCE_KM:
-        return None
-
-    prox = _proximity_score(distance_km)
     spec = _specialisation_score(mechanic.get("specialisations") or [], service_type)
     rat = _rating_score(
         float(mechanic.get("avg_rating") or 0),
@@ -288,6 +305,8 @@ def rank_mechanics(
     excluded_ids: Optional[List[int]] = None,
     top_n: int = 5,
     preferred_mechanic_id: Optional[int] = None,
+    area_id: Optional[str] = None,
+    include_neighbors: bool = False,
 ) -> List[Dict[str, Any]]:
     """Score all mechanics, prefer those with the required capability, return top N.
 
@@ -297,7 +316,14 @@ def rank_mechanics(
     scored = []
     for m in mechanics:
         result = score_mechanic(
-            m, request_lat, request_lon, service_type, excluded_ids, preferred_mechanic_id
+            m,
+            request_lat,
+            request_lon,
+            service_type,
+            excluded_ids,
+            preferred_mechanic_id,
+            area_id=area_id,
+            include_neighbors=include_neighbors,
         )
         if result is not None:
             scored.append(result)
@@ -318,6 +344,8 @@ def rank_launch_fallback(
     top_n: int = 5,
     service_type: str = "",
     preferred_mechanic_id: Optional[int] = None,
+    area_id: Optional[str] = None,
+    include_neighbors: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return nearest verified, available providers without implying skill scores."""
     excluded = set(excluded_ids or [])
@@ -328,13 +356,21 @@ def rank_launch_fallback(
             continue
         if mechanic.get("is_available") is not True:
             continue
+        if area_id and not service_area_matches(mechanic, area_id, include_neighbors=include_neighbors):
+            continue
         latitude, longitude = mechanic.get("latitude"), mechanic.get("longitude")
-        if latitude is None or longitude is None:
-            continue
-
-        distance = haversine_km(request_lat, request_lon, float(latitude), float(longitude))
-        if distance > MAX_DISTANCE_KM:
-            continue
+        if area_id and service_area_matches(mechanic, area_id, include_neighbors=include_neighbors):
+            area = AREA_INDEX.get(area_id)
+            if area:
+                distance = haversine_km(request_lat, request_lon, float(area["center_lat"]), float(area["center_lng"]))
+            else:
+                distance = float(AREA_DEFAULT_RADIUS_KM)
+        elif latitude is None or longitude is None:
+            distance = float(AREA_DEFAULT_RADIUS_KM)
+        else:
+            distance = haversine_km(request_lat, request_lon, float(latitude), float(longitude))
+            if distance > MAX_DISTANCE_KM:
+                continue
         capability_tier = _capability_tier(mechanic, service_type)
 
         candidates.append({

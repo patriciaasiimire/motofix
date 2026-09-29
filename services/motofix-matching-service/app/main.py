@@ -28,6 +28,7 @@ from jose import JWTError, jwt
 
 load_dotenv()
 
+from .areas import AREA_INDEX, AREA_NAMES, resolve_area
 from .schemas import DispatchOutcome, MatchRequest, MatchResponse
 from .scoring import rank_launch_fallback, rank_mechanics
 
@@ -214,6 +215,13 @@ async def match_mechanics(
                 detail=f"Could not reach Mechanic Verification Service: {exc}",
             )
 
+    driver_area_id = body.area_id or resolve_area(body.latitude, body.longitude)
+    if driver_area_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Your location is outside the current Motofix covered area. We only match mechanics serving launch areas like Ntinda, Nakawa, and Kampala Central.",
+        )
+
     ranked = rank_mechanics(
         mechanics=mechanics,
         request_lat=body.latitude,
@@ -222,6 +230,7 @@ async def match_mechanics(
         excluded_ids=excluded_ids,
         top_n=body.top_n or 5,
         preferred_mechanic_id=body.preferred_mechanic_id,
+        area_id=driver_area_id,
     )
 
     if not ranked:
@@ -234,11 +243,13 @@ async def match_mechanics(
                 top_n=body.top_n or 5,
                 service_type=body.service_type,
                 preferred_mechanic_id=body.preferred_mechanic_id,
+                area_id=driver_area_id,
             )
             if ranked:
                 logger.warning(
-                    "Launch matching fallback used: request_id=%s considered=%s returned=%s",
+                    "Launch matching fallback used: request_id=%s area=%s considered=%s returned=%s",
                     body.request_id,
+                    driver_area_id,
                     len(mechanics),
                     len(ranked),
                 )
@@ -246,7 +257,7 @@ async def match_mechanics(
         if not ranked:
             raise HTTPException(
                 status_code=404,
-                detail="No eligible mechanics found within range for this request.",
+                detail=f"No eligible mechanics found in the covered area '{AREA_NAMES.get(driver_area_id, driver_area_id)}' for this request.",
             )
 
     # Save the chosen mechanics as 'pending' so that if we re-run /match later
@@ -267,6 +278,8 @@ async def match_mechanics(
         request_id=body.request_id,
         candidates=ranked,
         total_eligible=len(ranked),
+        resolved_area_id=driver_area_id,
+        resolved_area_name=AREA_NAMES.get(driver_area_id, driver_area_id),
     )
 
 

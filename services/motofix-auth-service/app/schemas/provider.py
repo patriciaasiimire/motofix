@@ -14,6 +14,7 @@ class ProviderRegisterRequest(BaseModel):
     specialty: Optional[str] = None
     provider_type: Literal["mechanic", "towing_provider"]
     vehicle_type: Optional[str] = "boda"
+    service_area_ids: List[str] = []
 
 
 class ProviderLoginRequest(BaseModel):

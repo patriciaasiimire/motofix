@@ -91,6 +91,8 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS status_reason TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMPTZ",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'::jsonb",
+            "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS service_area_ids TEXT[] NOT NULL DEFAULT ARRAY[]::text[]",
+            "ALTER TABLE towing_providers ADD COLUMN IF NOT EXISTS service_area_ids TEXT[] NOT NULL DEFAULT ARRAY[]::text[]",
         ]:
             await conn.execute(col_sql)
 
@@ -106,6 +108,7 @@ async def lifespan(app: FastAPI):
                 specialty     TEXT,
                 provider_type TEXT NOT NULL DEFAULT 'mechanic',
                 vehicle_type  TEXT DEFAULT 'boda',
+                service_area_ids TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
                 password_hash TEXT NOT NULL,
                 is_verified   BOOLEAN NOT NULL DEFAULT FALSE,
                 is_available  BOOLEAN NOT NULL DEFAULT FALSE,
@@ -126,6 +129,7 @@ async def lifespan(app: FastAPI):
                 latitude         DOUBLE PRECISION NOT NULL DEFAULT 0,
                 longitude        DOUBLE PRECISION NOT NULL DEFAULT 0,
                 vehicle_capacity INTEGER DEFAULT 1,
+                service_area_ids TEXT[] NOT NULL DEFAULT ARRAY[]::text[],
                 password_hash    TEXT NOT NULL,
                 is_verified      BOOLEAN NOT NULL DEFAULT FALSE,
                 is_available     BOOLEAN NOT NULL DEFAULT FALSE,

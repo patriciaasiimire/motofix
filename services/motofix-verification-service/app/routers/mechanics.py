@@ -59,8 +59,8 @@ async def read_all(
 
     rows = await db.fetch(f"""
         SELECT id, phone, full_name, location, latitude, longitude,
-               specialty, is_available, is_verified, rating, total_ratings,
-               jobs_completed, fcm_token
+               specialty, service_area_ids, is_available, is_verified, rating,
+               total_ratings, jobs_completed, fcm_token
         FROM mechanics
         {where}
         ORDER BY id DESC
@@ -73,6 +73,7 @@ async def read_all(
         row["name"] = row.pop("full_name", None) or f"Mechanic {row['id']}"
         row["avg_rating"] = float(row.get("rating") or 0)
         row["rating_count"] = int(row.get("total_ratings") or 0)
+        row["service_area_ids"] = list(row.get("service_area_ids") or [])
         # Split specialty CSV into specialisations array
         spec = (row.get("specialty") or "").strip()
         row["specialisations"] = [s.strip() for s in spec.split(",") if s.strip()] if spec else []

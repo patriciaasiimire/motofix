@@ -27,6 +27,7 @@ class MatchRequest(BaseModel):
         description="Driver's saved helper; boosted only when verified, available, nearby, and capable for this job type.",
     )
     top_n: Optional[int] = Field(5, description="Maximum number of candidates to return", ge=1, le=20)
+    area_id: Optional[str] = Field(None, description="Optional resolved area id used for launch matching; server can resolve from GPS when absent.")
 
 
 class MechanicCandidate(BaseModel):
@@ -47,6 +48,8 @@ class MatchResponse(BaseModel):
     request_id: Optional[int]
     candidates: List[MechanicCandidate]
     total_eligible: int
+    resolved_area_id: Optional[str] = None
+    resolved_area_name: Optional[str] = None
 
 
 class DispatchOutcome(BaseModel):
