@@ -1,0 +1,58 @@
+name: Admin Portal Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build admin portal
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: interfaces/motofix-admin-portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: interfaces/motofix-admin-portal/package-lock.json
+      - run: npm ci
+      - name: Create production environment file
+        env:
+          VITE_API_ADMIN_URL: ${{ secrets.ADMIN_VITE_API_ADMIN_URL }}
+          VITE_API_REQUESTS_URL: ${{ secrets.ADMIN_VITE_API_REQUESTS_URL }}
+          VITE_API_MECHANICS_URL: ${{ secrets.ADMIN_VITE_API_MECHANICS_URL }}
+          VITE_API_AUTH_URL: ${{ secrets.ADMIN_VITE_API_AUTH_URL }}
+          VITE_API_NOTIFICATIONS_URL: ${{ secrets.ADMIN_VITE_API_NOTIFICATIONS_URL }}
+          VITE_API_BASE_URL: ${{ secrets.ADMIN_VITE_API_BASE_URL }}
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.ADMIN_VITE_GOOGLE_MAPS_API_KEY }}
+        shell: bash
+        run: |
+          vars=(
+            VITE_API_ADMIN_URL VITE_API_REQUESTS_URL VITE_API_MECHANICS_URL
+            VITE_API_AUTH_URL VITE_API_NOTIFICATIONS_URL VITE_API_BASE_URL
+            VITE_GOOGLE_MAPS_API_KEY
+          )
+          : > .env.production
+          for name in "${vars[@]}"; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              printf '%s=%s\n' "$name" "$value" >> .env.production
+            fi
+          done
+          if [ ! -s .env.production ]; then rm .env.production; fi
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: motofix-admin-portal-dist
+          path: interfaces/motofix-admin-portal/dist/
+          if-no-files-found: error
+          retention-days: 14

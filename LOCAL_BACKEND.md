@@ -1,6 +1,6 @@
-# Local Backend (Windows)
+# Optional Offline Backend (Windows)
 
-Run the first three API services directly on Windows with Python virtual environments and local PostgreSQL. Docker and Podman are not needed. Install Python and PostgreSQL for Windows; configure PostgreSQL to listen on port `5433` (or change the port in each `.env` if your local server uses `5432`).
+This is an optional offline/development path for running the first three API services directly on Windows with Python virtual environments and local PostgreSQL. It is not required to build the frontends or Android app. Live APIs for other users must be deployed to Railway, Render, Fly.io, or a VPS; GitHub Actions builds, tests, or deploys code but is not a persistent API host. Docker and Podman are not needed for this path. Install Python and PostgreSQL for Windows; configure PostgreSQL to listen on port `5433` (or change the port in each `.env` if your local server uses `5432`).
 
 ## Create databases
 

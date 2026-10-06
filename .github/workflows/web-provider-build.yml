@@ -1,0 +1,66 @@
+name: Provider Web Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build provider web app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: interfaces/motofix-service-provider-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: interfaces/motofix-service-provider-app/package-lock.json
+      - run: npm ci
+      - name: Create production environment file
+        env:
+          VITE_API_AUTH_URL: ${{ secrets.PROVIDER_VITE_API_AUTH_URL }}
+          VITE_API_MECHANICS_URL: ${{ secrets.PROVIDER_VITE_API_MECHANICS_URL }}
+          VITE_API_REQUESTS_URL: ${{ secrets.PROVIDER_VITE_API_REQUESTS_URL }}
+          VITE_API_DIAGNOSIS_URL: ${{ secrets.PROVIDER_VITE_API_DIAGNOSIS_URL }}
+          VITE_API_SUBSCRIPTIONS_URL: ${{ secrets.PROVIDER_VITE_API_SUBSCRIPTIONS_URL }}
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.PROVIDER_VITE_GOOGLE_MAPS_API_KEY }}
+          VITE_FIREBASE_API_KEY: ${{ secrets.PROVIDER_VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.PROVIDER_VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.PROVIDER_VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.PROVIDER_VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.PROVIDER_VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.PROVIDER_VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_VAPID_KEY: ${{ secrets.PROVIDER_VITE_FIREBASE_VAPID_KEY }}
+        shell: bash
+        run: |
+          vars=(
+            VITE_API_AUTH_URL VITE_API_MECHANICS_URL VITE_API_REQUESTS_URL
+            VITE_API_DIAGNOSIS_URL VITE_API_SUBSCRIPTIONS_URL VITE_GOOGLE_MAPS_API_KEY
+            VITE_FIREBASE_API_KEY VITE_FIREBASE_AUTH_DOMAIN VITE_FIREBASE_PROJECT_ID
+            VITE_FIREBASE_STORAGE_BUCKET VITE_FIREBASE_MESSAGING_SENDER_ID
+            VITE_FIREBASE_APP_ID VITE_FIREBASE_VAPID_KEY
+          )
+          : > .env.production
+          for name in "${vars[@]}"; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              printf '%s=%s\n' "$name" "$value" >> .env.production
+            fi
+          done
+          if [ ! -s .env.production ]; then rm .env.production; fi
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: motofix-provider-web-dist
+          path: interfaces/motofix-service-provider-app/dist/
+          if-no-files-found: error
+          retention-days: 14
