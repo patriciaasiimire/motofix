@@ -3,6 +3,7 @@
 # details, updating their profile, saving their FCM token (so they can receive push
 # notifications), and similar account housekeeping used across the apps.
 
+import json
 import logging
 from typing import Optional, List
 
@@ -132,7 +133,10 @@ async def get_my_preferences(
         )
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"preferences": dict(row["preferences"]) if row["preferences"] else {}}
+    preferences = row["preferences"]
+    if isinstance(preferences, str):
+        preferences = json.loads(preferences) if preferences else {}
+    return {"preferences": preferences or {}}
 
 
 # ── PATCH /users/me/preferences ────────────────────────────────────────────────
@@ -143,7 +147,6 @@ async def update_my_preferences(
     body: PreferencesUpdate,
     user: dict = Depends(get_current_user),
 ):
-    import json
     pool = await _get_conn(request)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
