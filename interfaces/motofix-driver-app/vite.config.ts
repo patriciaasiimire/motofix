@@ -16,13 +16,9 @@ logger.error = (msg, opts) => {
 export default defineConfig(({ mode }) => ({
   customLogger: logger,
   server: {
-    host: "::",
+    host: "127.0.0.1",
     port: 8085,
     allowedHosts: 'all',
-    https: {
-      cert: './cert.pem',
-      key: './cert-key.pem',
-    },
     proxy: {
       '/auth':         { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/users':        { target: 'http://127.0.0.1:8000', changeOrigin: true },
