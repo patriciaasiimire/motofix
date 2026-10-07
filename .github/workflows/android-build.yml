@@ -127,10 +127,28 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+          ANDROID_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEYSTORE_PASSWORD }}
+          ANDROID_DEBUG_KEY_ALIAS: ${{ secrets.ANDROID_DEBUG_KEY_ALIAS }}
+          ANDROID_DEBUG_KEY_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEY_PASSWORD }}
         run: |
           chmod +x android/gradlew
           cd android
-          ./gradlew assembleDebug
+          if [ -n "$ANDROID_DEBUG_KEYSTORE_BASE64" ] || [ -n "$ANDROID_DEBUG_KEYSTORE_PASSWORD" ] || [ -n "$ANDROID_DEBUG_KEY_ALIAS" ] || [ -n "$ANDROID_DEBUG_KEY_PASSWORD" ]; then
+            if [ -z "$ANDROID_DEBUG_KEYSTORE_BASE64" ] || [ -z "$ANDROID_DEBUG_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_DEBUG_KEY_ALIAS" ] || [ -z "$ANDROID_DEBUG_KEY_PASSWORD" ]; then
+              echo "::error::Set all four ANDROID_DEBUG_* signing secrets to use a stable debug certificate."
+              exit 1
+            fi
+            echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/motofix-debug.keystore"
+            ./gradlew assembleDebug \
+              -Pandroid.injected.signing.store.file="$RUNNER_TEMP/motofix-debug.keystore" \
+              -Pandroid.injected.signing.store.password="$ANDROID_DEBUG_KEYSTORE_PASSWORD" \
+              -Pandroid.injected.signing.key.alias="$ANDROID_DEBUG_KEY_ALIAS" \
+              -Pandroid.injected.signing.key.password="$ANDROID_DEBUG_KEY_PASSWORD"
+          else
+            ./gradlew assembleDebug
+          fi
 
       - name: Decode release keystore
         if: github.event_name == 'workflow_dispatch' && inputs.build_type == 'release'
