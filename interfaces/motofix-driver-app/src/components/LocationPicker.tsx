@@ -33,9 +33,17 @@ export function LocationPicker({ onLocationChange }: LocationPickerProps) {
   const [errMsg,       setErrMsg]       = useState('');
   const mapRef = useRef<google.maps.Map | null>(null);
 
-  const { isLoaded } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '',
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY?.trim();
+  const { isLoaded, loadError } = useLoadScript({
+    googleMapsApiKey: apiKey ?? '',
   });
+  const [mapsAuthFailed, setMapsAuthFailed] = useState(false);
+
+  useEffect(() => {
+    const onMapsAuthFailure = () => setMapsAuthFailed(true);
+    window.addEventListener('motofix:google-maps-auth-failure', onMapsAuthFailure);
+    return () => window.removeEventListener('motofix:google-maps-auth-failure', onMapsAuthFailure);
+  }, []);
 
   const reverseGeocode = useCallback((lat: number, lng: number, cb: (addr: string) => void) => {
     if (!window.google?.maps?.Geocoder) {
@@ -128,7 +136,14 @@ export function LocationPicker({ onLocationChange }: LocationPickerProps) {
       )}
 
       {/* Google Map after detection */}
-      {markerPos && isLoaded && (
+      {markerPos && (!apiKey || loadError || mapsAuthFailed) && (
+        <div role="alert" className="rounded-xl border border-border bg-muted p-3 text-xs text-muted-foreground">
+          {!apiKey
+            ? <>Set <code>VITE_GOOGLE_MAPS_API_KEY</code> in the driver app&apos;s <code>.env.local</code> and restart Vite to show the map.</>
+            : 'Google Maps could not load. Check the API key, billing, enabled APIs, and HTTP referrer restrictions.'}
+        </div>
+      )}
+      {markerPos && isLoaded && apiKey && !loadError && !mapsAuthFailed && (
         <div className="rounded-xl overflow-hidden" style={{ border: '1.5px solid var(--border-2)' }}>
           <GoogleMap
             mapContainerStyle={MAP_CONTAINER_STYLE}

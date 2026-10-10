@@ -5,7 +5,6 @@
 
 import { createContext, useContext, useState } from 'react'
 import type { User } from '@/types'
-import { startActivity, clearInactivity } from '@/utils/sessionTimeout'
 
 interface AuthCtx {
   user: User | null
@@ -39,8 +38,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     lsSet('motofix_sp_token', newToken)
     lsSet('motofix_sp_user', JSON.stringify(newUser))
     sessionStorage.removeItem('motofix_sp_greeting')  // fresh home-screen headline each login
-    clearInactivity()  // clear any stale inactivity flag
-    startActivity()    // begin the 15-minute idle clock for this session
     setToken(newToken)
     setUser(newUser)
   }
@@ -48,7 +45,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = () => {
     lsDel('motofix_sp_token')
     lsDel('motofix_sp_user')
-    clearInactivity()
     setToken(null)
     setUser(null)
   }

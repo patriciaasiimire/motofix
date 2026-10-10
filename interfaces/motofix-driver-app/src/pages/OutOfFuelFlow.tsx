@@ -2,10 +2,11 @@
 // stations (from OpenStreetMap) on a map with directions, includes the AI fuel advisor
 // (is this fuel safe for my car?), and can request fuel delivery help.
 
-import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode, type MutableRefObject } from 'react';
 import { type LL } from '@/utils/routeFollow';
 import { createPortal } from 'react-dom';
-import { useLoadScript, GoogleMap, Marker, DirectionsRenderer, Polyline } from '@react-google-maps/api';
+import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
+import { Icon, type Map as LeafletMap } from 'leaflet';
 import {
   X, XCircle, ChevronRight, AlertTriangle, CheckCircle2,
   Navigation2, Loader2, MapPin, Star, Phone, Fuel, Maximize2, Minimize2,
@@ -60,11 +61,15 @@ function fuelBadge(engineType: string, fuelId: string): 'recommended' | 'caution
   return null;
 }
 
-const MAP_CONTAINER = { width: '100%', height: '100%' };
-const MAP_STYLES = [
-  { featureType: 'poi',     stylers: [{ visibility: 'off' }] },
-  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
-];
+const KAMPALA: LL = { lat: 0.3476, lng: 32.5825 };
+const LEAFLET_BASE_CSS = `
+  .leaflet-container{position:relative;overflow:hidden;background:#e5e7eb;outline:0;font-family:Arial,sans-serif}
+  .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas{position:absolute;left:0;top:0}
+  .leaflet-pane{z-index:400}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:600}.leaflet-tooltip-pane{z-index:650}.leaflet-popup-pane{z-index:700}
+  .leaflet-tile{visibility:hidden;max-width:none!important}.leaflet-tile-loaded{visibility:inherit}.leaflet-container img{max-width:none!important;max-height:none!important}
+  .leaflet-control-container{position:absolute;inset:0;pointer-events:none}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-right{right:0}.leaflet-control{position:relative;pointer-events:auto}
+  .leaflet-control-attribution{background:#ffffffd9;padding:2px 5px;font:11px Arial,sans-serif}.leaflet-popup-content-wrapper{border-radius:10px}.leaflet-popup-content{margin:10px 12px}
+`;
 
 // Directional car icon for navigation mode (heading in degrees)
 const NAV_CAR_SVG = (heading: number) => `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
@@ -82,6 +87,32 @@ const STATION_PIN_SVG = (active: boolean) => `data:image/svg+xml;charset=UTF-8,$
   `<text x="18" y="24" text-anchor="middle" font-size="16" fill="white">⛽</text>` +
   `</svg>`
 )}`;
+
+function MapViewport({ mapRef, center, points, zoom = 13 }: {
+  mapRef: MutableRefObject<LeafletMap | null>;
+  center: LL;
+  points?: LL[];
+  zoom?: number;
+}) {
+  const map = useMap();
+  const pointsKey = points?.map(({ lat, lng }) => `${lat},${lng}`).join(';') ?? '';
+  useEffect(() => {
+    mapRef.current = map;
+    return () => {
+      if (mapRef.current === map) mapRef.current = null;
+    };
+  }, [map, mapRef]);
+  useEffect(() => {
+    if (points && points.length > 1) {
+      map.fitBounds(points.map(({ lat, lng }) => [lat, lng]) as [number, number][], { padding: [36, 36], maxZoom: 16 });
+    } else {
+      map.setView(center, zoom);
+    }
+    // pointsKey tracks coordinate changes without refitting on unrelated renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, pointsKey, center.lat, center.lng, zoom]);
+  return null;
+}
 
 interface Props {
   onClose: () => void;
@@ -101,7 +132,7 @@ export default function OutOfFuelFlow({ onClose }: Props) {
   const [driverPos, setDriverPos] = useState<{ lat: number; lng: number } | null>(null);
   const [loadingDelivery, setLoadingDelivery] = useState(false);
   const [mapHeight, setMapHeight]             = useState(240);
-  const [directions, setDirections]           = useState<google.maps.DirectionsResult | null>(null);
+  const [directions, setDirections]           = useState<LL[] | null>(null);
   const [routeInfo, setRouteInfo]             = useState<{ duration: string; distance: string } | null>(null);
   const [detailStation, setDetailStation]     = useState<SimStation | null>(null);
   const [profileStation, setProfileStation]   = useState<SimStation | null>(null);
@@ -128,7 +159,7 @@ export default function OutOfFuelFlow({ onClose }: Props) {
     return () => clearInterval(t);
   }, [step]);
 
-  const mapRef       = useRef<google.maps.Map | null>(null);
+  const mapRef       = useRef<LeafletMap | null>(null);
   const stationsFetchRef = useRef<Promise<SimStation[]> | null>(null);
   const sheetRef     = useRef<HTMLDivElement>(null);
   const dragRef      = useRef<{ startY: number; baseOffset: number } | null>(null);
@@ -180,10 +211,6 @@ export default function OutOfFuelFlow({ onClose }: Props) {
     window.removeEventListener('pointermove', onDragMove);
     window.removeEventListener('pointerup', onDragEnd);
   }, [onDragMove, onDragEnd]);
-
-  const { isLoaded } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '',
-  });
 
   // Get driver GPS on mount
   useEffect(() => {
@@ -357,10 +384,10 @@ export default function OutOfFuelFlow({ onClose }: Props) {
 
   const selectedFuelLabel = FUEL_TYPES.find(f => f.id === fuelType)?.label ?? fuelType;
 
-  const stationMarkerIcon = useCallback((s: SimStation): google.maps.Icon => ({
-    url: STATION_PIN_SVG(selected?.place_id === s.place_id),
-    scaledSize: new window.google.maps.Size(36, 44),
-    anchor: new window.google.maps.Point(18, 44),
+  const stationMarkerIcon = useCallback((s: SimStation) => new Icon({
+    iconUrl: STATION_PIN_SVG(selected?.place_id === s.place_id),
+    iconSize: [36, 44],
+    iconAnchor: [18, 44],
   }), [selected]);
 
   const beginNavigation = useCallback((s: SimStation) => {
@@ -413,21 +440,17 @@ export default function OutOfFuelFlow({ onClose }: Props) {
     setDetailStation(s);
     setDirections(null);
     setRouteInfo(null);
-    if (driverPos && window.google?.maps) {
-      new window.google.maps.DirectionsService().route(
-        {
-          origin: { lat: driverPos.lat, lng: driverPos.lng },
-          destination: { lat: s.lat, lng: s.lng },
-          travelMode: window.google.maps.TravelMode.DRIVING,
-        },
-        (result, status) => {
-          if (status === 'OK' && result) {
-            setDirections(result);
-            const leg = result.routes[0]?.legs[0];
-            if (leg) setRouteInfo({ duration: leg.duration?.text ?? '', distance: leg.distance?.text ?? '' });
-          }
-        },
-      );
+    if (driverPos) {
+      const destination = { lat: s.lat, lng: s.lng };
+      const distanceKm = Math.max(haversineM(driverPos, destination) / 1000, s.distance_km || 0);
+      const durationMinutes = Math.max(1, Math.round((distanceKm / 25) * 60));
+      setDirections([driverPos, destination]);
+      setRouteInfo({
+        distance: `${distanceKm.toFixed(1)} km`,
+        duration: durationMinutes < 60
+          ? `${durationMinutes} min`
+          : `${Math.floor(durationMinutes / 60)} hr ${durationMinutes % 60} min`,
+      });
     }
   }, [selected, driverPos]);
 
@@ -460,12 +483,6 @@ export default function OutOfFuelFlow({ onClose }: Props) {
           from { opacity:0; transform:translateY(6px); }
           to   { opacity:1; transform:translateY(0);   }
         }
-        /* Hide Google Maps attribution text — scoped to the map only, so it
-           never hides our own buttons that link to Google Maps directions. */
-        .gm-style-cc, .gm-style-cc + div,
-        .gm-style a[href*="maps.google.com"],
-        .gm-style a[href*="google.com/maps"] { display: none !important; }
-        .gmnoprint { display: none !important; }
       `}</style>
 
       {/* Sheet */}
@@ -1216,62 +1233,57 @@ export default function OutOfFuelFlow({ onClose }: Props) {
                 </div>
 
                 {/* Map */}
-                {isLoaded && driverPos ? (
-                  <div style={{
+                <div style={{
                     position: 'relative',
                     height: mapHeight, borderRadius: 16, overflow: 'hidden',
                     border: '2px solid var(--oof-text-faint)', marginBottom: 16,
                     transition: 'height 0.3s ease',
                   }}>
-                    <GoogleMap
-                      mapContainerStyle={MAP_CONTAINER}
-                      center={driverPos}
+                    <style>{LEAFLET_BASE_CSS}</style>
+                    <MapContainer
+                      center={driverPos ?? KAMPALA}
                       zoom={13}
-                      options={{ disableDefaultUI: true, keyboardShortcuts: false, gestureHandling: 'cooperative', clickableIcons: false, styles: MAP_STYLES as google.maps.MapTypeStyle[] }}
-                      onLoad={m => { mapRef.current = m; }}
+                      style={MAP_CONTAINER}
+                      zoomControl={false}
                     >
-                      <Marker
-                        position={driverPos}
-                        icon={navigating ? {
-                          url: NAV_CAR_SVG(userHeading),
-                          scaledSize: new window.google.maps.Size(44, 44),
-                          anchor: new window.google.maps.Point(22, 22),
-                        } : {
-                          url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
+                      <MapViewport
+                        mapRef={mapRef}
+                        center={driverPos ?? KAMPALA}
+                        points={driverPos ? [driverPos, ...stations.map(s => ({ lat: s.lat, lng: s.lng }))] : undefined}
+                      />
+                      <TileLayer
+                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                      />
+                      {driverPos && (
+                        <Marker
+                          position={driverPos}
+                          icon={navigating
+                            ? new Icon({ iconUrl: NAV_CAR_SVG(userHeading), iconSize: [44, 44], iconAnchor: [22, 22] })
+                            : new Icon({ iconUrl: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
                             '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40">' +
                             '<path d="M16 1C7.72 1 1 7.72 1 16C1 26.5 16 39 16 39C16 39 31 26.5 31 16C31 7.72 24.28 1 16 1Z" fill="#3B82F6" stroke="white" stroke-width="2"/>' +
                             '<circle cx="16" cy="12" r="4" fill="white"/>' +
                             '<path d="M8 24c0-4.42 3.58-8 8-8s8 3.58 8 8z" fill="white"/>' +
                             '</svg>'
-                          )}`,
-                          scaledSize: new window.google.maps.Size(32, 40),
-                          anchor: new window.google.maps.Point(16, 40),
-                        }}
-                        title="Your location"
-                      />
+                          )}`, iconSize: [32, 40], iconAnchor: [16, 40] })}
+                          title="Your location"
+                        >
+                          <Popup>Your location</Popup>
+                        </Marker>
+                      )}
                       {stations.map(s => (
                         <Marker
                           key={s.place_id}
                           position={{ lat: s.lat, lng: s.lng }}
                           icon={stationMarkerIcon(s)}
-                          title={s.name}
-                          onClick={() => handleStationClick(s)}
-                        />
+                          eventHandlers={{ click: () => handleStationClick(s) }}
+                        >
+                          <Popup>{s.name}</Popup>
+                        </Marker>
                       ))}
-                      {directions && (
-                        <DirectionsRenderer
-                          directions={directions}
-                          options={{
-                            suppressMarkers: true,
-                            polylineOptions: {
-                              strokeColor: '#22C55E',
-                              strokeWeight: 5,
-                              strokeOpacity: 0.85,
-                            },
-                          }}
-                        />
-                      )}
-                    </GoogleMap>
+                      {directions && <Polyline positions={directions} pathOptions={{ color: '#22C55E', weight: 5, opacity: 0.85 }} />}
+                    </MapContainer>
 
                     {/* Navigation banner */}
                     {navigating && (
@@ -1338,15 +1350,6 @@ export default function OutOfFuelFlow({ onClose }: Props) {
                       ))}
                     </div>
                   </div>
-                ) : (
-                  <div style={{
-                    height: 180, borderRadius: 16,
-                    background: 'var(--oof-surface)', border: '1px solid var(--oof-border)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16,
-                  }}>
-                    <p style={{ fontSize: 13, color: 'var(--oof-text-faint)' }}>Loading map…</p>
-                  </div>
-                )}
 
                 {/* Section title */}
                 {stations.length > 0 && (
@@ -1663,51 +1666,42 @@ function StationDetailPopup({
   );
 }
 
-// ── Directions + 3D locator map (Maps JavaScript API) ────────────────────────
-function StationProfileModal({ station, driverPos, isLoaded, onClose }: {
+// ── Station locator map with an estimated straight-line route ────────────────
+function StationProfileModal({ station, driverPos, onClose }: {
   station: SimStation;
   driverPos: { lat: number; lng: number } | null;
-  isLoaded: boolean;
   onClose: () => void;
 }) {
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
-  const [routeIndex, setRouteIndex] = useState(0);
+  const mapRef = useRef<LeafletMap | null>(null);
+  const [directions, setDirections] = useState<LL[] | null>(null);
   const [info, setInfo] = useState<{ duration: string; distance: string } | null>(null);
   const [navOn, setNavOn] = useState(false);   // in-app turn-by-turn mode
   const dest = { lat: station.lat, lng: station.lng };
-  // A clean vector "Map ID" enables tilt + 3D buildings on a clear roadmap.
-  const MAP_ID = import.meta.env.VITE_GOOGLE_MAPS_MAP_ID as string | undefined;
 
   useEffect(() => {
-    if (!isLoaded || !driverPos || !window.google?.maps) return;
-    new window.google.maps.DirectionsService().route(
-      // Ask for alternatives so we can pick the SHORTEST drivable route, not the
-      // default fastest-by-time one (which can be longer in distance).
-      { origin: driverPos, destination: dest, travelMode: window.google.maps.TravelMode.DRIVING, provideRouteAlternatives: true },
-      (res, status) => {
-        if (status === 'OK' && res?.routes?.length) {
-          let best = 0, bestMeters = Infinity;
-          res.routes.forEach((r, i) => {
-            const m = r.legs.reduce((sum, leg) => sum + (leg.distance?.value ?? 0), 0);
-            if (m < bestMeters) { bestMeters = m; best = i; }
-          });
-          setDirections(res);
-          setRouteIndex(best);
-          const leg = res.routes[best]?.legs[0];
-          if (leg) setInfo({ duration: leg.duration?.text ?? '', distance: leg.distance?.text ?? '' });
-        }
-      },
-    );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, driverPos?.lat, driverPos?.lng, station.lat, station.lng]);
+    if (!driverPos) {
+      setDirections(null);
+      setInfo(null);
+      return;
+    }
+    const distanceKm = Math.max(haversineM(driverPos, dest) / 1000, station.distance_km || 0);
+    const durationMinutes = Math.max(1, Math.round((distanceKm / 25) * 60));
+    setDirections([driverPos, dest]);
+    setInfo({
+      distance: `${distanceKm.toFixed(1)} km`,
+      duration: durationMinutes < 60
+        ? `${durationMinutes} min`
+        : `${Math.floor(durationMinutes / 60)} hr ${durationMinutes % 60} min`,
+    });
+  }, [driverPos?.lat, driverPos?.lng, station.distance_km, station.lat, station.lng]);
 
-  const fit = (m: google.maps.Map) => {
-    if (!window.google?.maps) return;
-    const b = new window.google.maps.LatLngBounds();
-    b.extend(dest);
-    if (driverPos) b.extend(driverPos);
-    m.fitBounds(b, 80);
+  const fit = (m: LeafletMap) => {
+    const points = driverPos ? [driverPos, dest] : [dest];
+    if (points.length > 1) {
+      m.fitBounds(points.map(({ lat, lng }) => [lat, lng]) as [number, number][], { padding: [48, 48] });
+    } else {
+      m.setView(dest, 15);
+    }
   };
 
   const pin = (color: string) => `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
@@ -1746,28 +1740,28 @@ function StationProfileModal({ station, driverPos, isLoaded, onClose }: {
 
       {/* map */}
       <div style={{ flex: 1, position: 'relative' }}>
-        {isLoaded ? (
-          <GoogleMap
-            mapContainerStyle={{ width: '100%', height: '100%' }}
-            center={driverPos ?? dest}
-            zoom={15}
-            onLoad={m => { mapRef.current = m; fit(m); m.setTilt(47.5); m.setHeading(35); }}
-            options={{ disableDefaultUI: true, gestureHandling: 'greedy', clickableIcons: false, mapId: MAP_ID }}
-          >
-            {driverPos && <Marker position={driverPos} icon={{ url: pin('#3B82F6'), scaledSize: new window.google.maps.Size(34, 43), anchor: new window.google.maps.Point(17, 42) }} title="You" />}
-            <Marker position={dest} icon={{ url: fuelIcon, scaledSize: new window.google.maps.Size(40, 46), anchor: new window.google.maps.Point(20, 45) }} title={station.name} />
-            {directions && (
-              <DirectionsRenderer directions={directions} routeIndex={routeIndex} options={{ suppressMarkers: true, routeIndex, polylineOptions: { strokeColor: station.color, strokeWeight: 6, strokeOpacity: 0.9 } }} />
-            )}
-          </GoogleMap>
-        ) : (
-          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af' }}>Loading map…</div>
-        )}
+        <style>{LEAFLET_BASE_CSS}</style>
+        <MapContainer center={driverPos ?? dest ?? KAMPALA} zoom={15} style={{ width: '100%', height: '100%' }} zoomControl={false}>
+          <MapViewport mapRef={mapRef} center={driverPos ?? dest ?? KAMPALA} points={directions ?? undefined} zoom={15} />
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {driverPos && (
+            <Marker position={driverPos} icon={new Icon({ iconUrl: pin('#3B82F6'), iconSize: [34, 43], iconAnchor: [17, 42] })}>
+              <Popup>Your location</Popup>
+            </Marker>
+          )}
+          <Marker position={dest} icon={new Icon({ iconUrl: fuelIcon, iconSize: [40, 46], iconAnchor: [20, 45] })}>
+            <Popup>{station.name}</Popup>
+          </Marker>
+          {directions && <Polyline positions={directions} pathOptions={{ color: station.color, weight: 6, opacity: 0.9 }} />}
+        </MapContainer>
 
         {/* zoom */}
         <div style={{ position: 'absolute', bottom: 188, right: 14, display: 'flex', flexDirection: 'column', gap: 5, zIndex: 6 }}>
           {[{ l: '+', d: 1 }, { l: '−', d: -1 }].map(({ l, d }) => (
-            <button key={l} onClick={() => { const m = mapRef.current; if (m) m.setZoom(Math.min(Math.max((m.getZoom() ?? 14) + d, 6), 21)); }} style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(0,0,0,0.72)', border: '1px solid rgba(255,255,255,0.20)', color: '#fff', fontSize: 20, lineHeight: 1, cursor: 'pointer', backdropFilter: 'blur(4px)' }}>{l}</button>
+            <button key={l} onClick={() => { const m = mapRef.current; if (m) m.setZoom(Math.min(Math.max(m.getZoom() + d, 6), 21)); }} style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(0,0,0,0.72)', border: '1px solid rgba(255,255,255,0.20)', color: '#fff', fontSize: 20, lineHeight: 1, cursor: 'pointer', backdropFilter: 'blur(4px)' }}>{l}</button>
           ))}
         </div>
 
@@ -1795,7 +1789,7 @@ function StationProfileModal({ station, driverPos, isLoaded, onClose }: {
       </div>
 
       {navOn && directions && (
-        <NavView route={directions.routes[routeIndex]} station={station} onExit={() => setNavOn(false)} />
+        <NavView route={directions} station={station} routeInfo={info} onExit={() => setNavOn(false)} />
       )}
     </div>,
     document.body,
@@ -1888,7 +1882,7 @@ function NavView({ route, station, onExit }: {
   station: SimStation;
   onExit: () => void;
 }) {
-  const MAP_ID = import.meta.env.VITE_GOOGLE_MAPS_MAP_ID as string | undefined;
+  const MAP_ID = import.meta.env.VITE_GOOGLE_MAPS_MAP_ID?.trim() || undefined;
   const mapRef = useRef<google.maps.Map | null>(null);
   const steps = route.legs?.[0]?.steps ?? [];
   const [doneCount, setDoneCount] = useState(0);
@@ -1967,7 +1961,7 @@ function NavView({ route, station, onExit }: {
           center={curPos}
           zoom={15}
           onLoad={m => { mapRef.current = m; fitAll(m); }}
-          options={{ disableDefaultUI: true, gestureHandling: 'greedy', clickableIcons: false, mapId: MAP_ID }}
+          options={{ disableDefaultUI: true, gestureHandling: 'greedy', clickableIcons: false, ...(MAP_ID ? { mapId: MAP_ID } : {}) }}
         >
           {donePath.length >= 2 && <Polyline path={donePath} options={{ strokeColor: '#94a3b8', strokeWeight: 7, strokeOpacity: 0.8 }} />}
           {remPath.length >= 2 && <Polyline path={remPath} options={{ strokeColor: '#1A73E8', strokeWeight: 7, strokeOpacity: 0.95 }} />}

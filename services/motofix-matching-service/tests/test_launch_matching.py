@@ -20,7 +20,7 @@ class FakeResponse:
 
 
 class FakeAsyncClient:
-    def __init__(self, mechanics):
+    def __init__(self, mechanics, **_kwargs):
         self._mechanics = mechanics
 
     async def __aenter__(self):
@@ -55,7 +55,7 @@ def _post_match(monkeypatch, mechanics, launch_mode, lat=0.358, lon=32.611, serv
         monkeypatch.setattr(
             matching_main.httpx,
             "AsyncClient",
-            lambda: FakeAsyncClient(mechanics),
+            lambda **kwargs: FakeAsyncClient(mechanics, **kwargs),
         )
     matching_main.app.dependency_overrides[matching_main._require_token] = lambda: {"role": "driver"}
     try:
@@ -89,6 +89,13 @@ def test_normal_mode_keeps_404_when_no_capable_match(monkeypatch):
     response = _post_match(monkeypatch, [_mechanic()], launch_mode=False)
 
     assert response.status_code == 404
+
+
+def test_empty_mechanics_list_returns_clear_not_found(monkeypatch):
+    response = _post_match(monkeypatch, [], launch_mode=False)
+
+    assert response.status_code == 404
+    assert "No eligible mechanics found" in response.json()["detail"]
 
 
 def test_launch_fallback_never_returns_unverified_unavailable_or_distant_mechanics(monkeypatch):
@@ -154,6 +161,24 @@ def test_area_match_uses_service_areas_when_no_pin():
 
     assert [candidate["mechanic_id"] for candidate in ranked] == [1]
     assert ranked[0]["distance_km"] < MAX_DISTANCE_KM
+
+
+def test_numeric_launch_area_membership_matches_without_mechanic_coordinates():
+    mechanic = _mechanic(
+        25,
+        service_area_ids=[15],
+        latitude=None,
+        longitude=None,
+    )
+    ranked = rank_mechanics(
+        [mechanic],
+        0.358,
+        32.611,
+        "Roadside assist",
+        area_id="ntinda",
+    )
+
+    assert [candidate["mechanic_id"] for candidate in ranked] == [25]
 
 
 def test_area_filter_rejects_away_mechanics_even_if_verified_and_available(monkeypatch):

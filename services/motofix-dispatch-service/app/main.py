@@ -974,11 +974,11 @@ async def _dispatch_to_matched_mechanics(
         return
 
     lat, lng = coords
-    matching_url = os.getenv("MATCHING_SERVICE_URL", "http://localhost:8003")
+    matching_url = os.getenv("MATCHING_SERVICE_URL", "http://127.0.0.1:8003").rstrip("/")
 
     try:
         token = _service_token()
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.post(
                 f"{matching_url}/match",
                 headers={"Authorization": f"Bearer {token}"},
@@ -992,7 +992,32 @@ async def _dispatch_to_matched_mechanics(
                 },
             )
             resp.raise_for_status()
-            candidates = resp.json().get("candidates", [])
+            payload = resp.json()
+            candidates = payload.get("candidates", []) if isinstance(payload, dict) else []
+            if not isinstance(candidates, list):
+                logger.warning(
+                    "Matching service returned an invalid candidates list for request %s",
+                    request_id,
+                )
+                return
+            if not candidates:
+                logger.info("Matching service found no eligible mechanics for request %s", request_id)
+                return
+            if not all(isinstance(candidate, dict) for candidate in candidates):
+                logger.warning(
+                    "Matching service returned malformed candidates for request %s",
+                    request_id,
+                )
+                return
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:300]
+        logger.warning(
+            "Matching service returned HTTP %s for request %s: %s",
+            exc.response.status_code,
+            request_id,
+            detail,
+        )
+        return
     except Exception as exc:
         logger.warning("Matching service unreachable for request %s: %s", request_id, exc)
         return

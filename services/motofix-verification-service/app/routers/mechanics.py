@@ -5,7 +5,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import asyncpg
 
 router = APIRouter(prefix="/mechanics", tags=["Mechanics"])
@@ -16,8 +16,12 @@ class MechanicBase(BaseModel):
     phone: str
     name: str
     location: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    service_area_ids: List[int] = Field(default_factory=list)
     is_verified: bool = False
-    rating: int = 0
+    is_available: bool = True
+    rating: float = 0
     jobs_completed: int = 0
 
 
@@ -38,6 +42,7 @@ async def get_db() -> asyncpg.Connection:
 
 # ────────────────────────────── ENDPOINTS ──────────────────────────────
 
+@router.get("")
 @router.get("/")
 async def read_all(
     db: asyncpg.Connection = Depends(get_db),
@@ -58,7 +63,7 @@ async def read_all(
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     rows = await db.fetch(f"""
-        SELECT id, phone, full_name, location, latitude, longitude,
+        SELECT id, phone, name, location, latitude, longitude,
                specialty, service_area_ids, is_available, is_verified, rating,
                total_ratings, jobs_completed, fcm_token
         FROM mechanics
@@ -70,10 +75,10 @@ async def read_all(
     for r in rows:
         row = dict(r)
         # Normalise field names to what the scoring algorithm expects
-        row["name"] = row.pop("full_name", None) or f"Mechanic {row['id']}"
+        row["name"] = row.get("name") or f"Mechanic {row['id']}"
         row["avg_rating"] = float(row.get("rating") or 0)
         row["rating_count"] = int(row.get("total_ratings") or 0)
-        row["service_area_ids"] = list(row.get("service_area_ids") or [])
+        row["service_area_ids"] = [int(area_id) for area_id in (row.get("service_area_ids") or [])]
         # Split specialty CSV into specialisations array
         spec = (row.get("specialty") or "").strip()
         row["specialisations"] = [s.strip() for s in spec.split(",") if s.strip()] if spec else []
@@ -85,7 +90,9 @@ async def read_all(
 @router.get("/{mechanic_id}", response_model=Mechanic)
 async def read_one(mechanic_id: int, db: asyncpg.Connection = Depends(get_db)):
     query = """
-        SELECT id, phone, full_name AS name, location, is_verified, rating, jobs_completed
+        SELECT id, phone, COALESCE(NULLIF(name, ''), 'Mechanic ' || id::TEXT) AS name,
+               location, latitude, longitude, service_area_ids,
+               is_verified, is_available, rating, jobs_completed
         FROM mechanics
         WHERE id = $1
     """
@@ -93,6 +100,3 @@ async def read_one(mechanic_id: int, db: asyncpg.Connection = Depends(get_db)):
     if not result:
         raise HTTPException(status_code=404, detail="Mechanic not found")
     return dict(result)
-
-
-

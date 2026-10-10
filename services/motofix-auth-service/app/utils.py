@@ -15,12 +15,15 @@ def create_jwt(data: dict, role: str = "customer") -> str:
     Create a signed JWT.
     Expiry:
       - role == "admin"  → ADMIN_TOKEN_EXPIRE_HOURS  (default 8 h)
-      - all other roles  → ACCESS_TOKEN_EXPIRE_HOURS (default 24 h)
+      - all other roles  → ACCESS_TOKEN_EXPIRE_HOURS (default 10 years)
+
+    OTP is for login after explicit logout, a new install, or cleared app data,
+    not periodic re-authentication.
     """
     if role == "admin":
         hours = int(os.getenv("ADMIN_TOKEN_EXPIRE_HOURS", 8))
     else:
-        hours = int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS", 24))
+        hours = int(os.getenv("ACCESS_TOKEN_EXPIRE_HOURS", 87600))
 
     to_encode = data.copy()
     now = datetime.utcnow()

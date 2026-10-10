@@ -26,6 +26,23 @@ async def _get_conn(request: Request):
     return pool
 
 
+def _normalize_preferences(raw) -> dict:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw or {}
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not value:
+            return {}
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 class UserProfileUpdate(BaseModel):
@@ -133,10 +150,8 @@ async def get_my_preferences(
         )
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    preferences = row["preferences"]
-    if isinstance(preferences, str):
-        preferences = json.loads(preferences) if preferences else {}
-    return {"preferences": preferences or {}}
+    preferences = _normalize_preferences(row["preferences"])
+    return {"preferences": preferences}
 
 
 # ── PATCH /users/me/preferences ────────────────────────────────────────────────
@@ -161,7 +176,8 @@ async def update_my_preferences(
         )
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"preferences": dict(row["preferences"]) if row["preferences"] else {}}
+    preferences = _normalize_preferences(row["preferences"])
+    return {"preferences": preferences}
 
 
 # ── GET /users/ (admin list) ───────────────────────────────────────────────────

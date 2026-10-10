@@ -17,7 +17,6 @@ import { ThemeProvider, useTheme } from '@/contexts/ThemeContext'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { WebSocketProvider } from '@/contexts/WebSocketContext'
 import ProtectedRoute from '@/components/ProtectedRoute'
-import InactivityGuard from '@/components/InactivityGuard'
 import { useFcmToken } from '@/hooks/useFcmToken'
 import ChangePassword from '@/pages/ChangePassword'
 import Login from '@/pages/Login'
@@ -78,7 +77,6 @@ function AppRoutes() {
           },
         }}
       />
-      <InactivityGuard />
       <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/intro" element={<Splash />} />

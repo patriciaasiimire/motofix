@@ -7,8 +7,7 @@ import { useNavigate } from 'react-router-dom'
 import { Navigation2, Phone, MessageCircle, MapPin, Maximize2, Minimize2, Stethoscope, ChevronLeft, Wrench, Smartphone, Clock, User, Star, Ban, Check, Sparkles, Wallet, CheckCircle2 } from 'lucide-react'
 import { toast } from 'sonner'
 import CancelJobModal from '@/components/CancelJobModal'
-import { useLoadScript, GoogleMap, Marker, Polyline } from '@react-google-maps/api'
-import { buildRouteMeta, projectToRoute, pointAtDist, remainingPath, type RouteMeta, type LL } from '@/utils/routeFollow'
+import type { LL } from '@/utils/routeFollow'
 import { useJobSim, SIM_MINUTES } from '@/hooks/useJobSim'
 import { reverseGeocode } from '@/utils/geocode'
 import { C } from '@/styles/tokens'
@@ -20,6 +19,7 @@ import EmptyState from '@/components/EmptyState'
 import DiagnosticTool from '@/components/DiagnosticTool'
 import TrackingMap from '@/components/TrackingMap'
 import { formatUGX } from '@/utils/formatters'
+import { MOTOBOT_ENABLED } from '@/config/features'
 import type { ServiceRequest } from '@/types'
 
 function initials(name?: string) {
@@ -27,51 +27,6 @@ function initials(name?: string) {
   const p = name.trim().split(' ')
   return p.length === 1 ? p[0].slice(0, 2).toUpperCase() : (p[0][0] + p[p.length - 1][0]).toUpperCase()
 }
-
-const MAP_CONTAINER_STYLE = { height: '100%', width: '100%' }
-const KAMPALA_CENTER = { lat: 0.3476, lng: 32.5825 }
-
-// Clean light map style — strips POI/transit clutter, keeps standard Google Maps look
-const MAP_LIGHT_STYLES = [
-  { featureType: 'poi',     stylers: [{ visibility: 'off' }] },
-  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
-]
-
-
-// Driver: blue map pin with person silhouette — anchor at bottom tip (22, 53)
-// NOTE: static SVG only — Google Maps loads marker icons as plain images, where
-// SMIL <animate> is disabled and (in Firefox) can make the whole icon fail to
-// rasterize → invisible pin. Keep this a static teardrop like MECHANIC_CAR_SVG.
-const DRIVER_PIN_SVG = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="56" viewBox="0 0 44 56">' +
-  '<ellipse cx="22" cy="55" rx="5" ry="1.5" fill="rgba(0,0,0,0.18)"/>' +
-  '<circle cx="22" cy="20" r="19" fill="none" stroke="#3B82F6" stroke-width="2" opacity="0.28"/>' +
-  '<path d="M22 2C12.06 2 4 10.06 4 20C4 32 22 53 22 53C22 53 40 32 40 20C40 10.06 31.94 2 22 2Z" fill="#3B82F6" stroke="white" stroke-width="2.5"/>' +
-  '<circle cx="22" cy="14" r="5" fill="white"/>' +
-  '<path d="M12 30c0-5.52 4.48-10 10-10s10 4.48 10 10z" fill="white"/>' +
-  '</svg>'
-)}`
-
-// Mechanic/provider: red teardrop pin with 👨‍🔧 emoji — anchor at pin tip (27, 63)
-const MECHANIC_CAR_SVG = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="54" height="66" viewBox="0 0 54 66">' +
-  '<defs>' +
-  '<radialGradient id="pg" cx="38%" cy="28%" r="68%">' +
-  '<stop offset="0%" stop-color="#F87171"/>' +
-  '<stop offset="100%" stop-color="#B91C1C"/>' +
-  '</radialGradient>' +
-  '<filter id="sh" x="-30%" y="-10%" width="160%" height="160%">' +
-  '<feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="rgba(0,0,0,0.35)"/>' +
-  '</filter>' +
-  '</defs>' +
-  '<ellipse cx="27" cy="64" rx="9" ry="3" fill="rgba(0,0,0,0.22)"/>' +
-  '<path filter="url(#sh)" d="M27 2C15.4 2 6 11.4 6 23C6 38.5 27 63 27 63C27 63 48 38.5 48 23C48 11.4 38.6 2 27 2Z" fill="url(#pg)" stroke="white" stroke-width="2.5"/>' +
-  '<path d="M17 11C19.5 7 23 5 27 5C31 5 34.5 7 37 11" fill="none" stroke="rgba(255,255,255,0.45)" stroke-width="3" stroke-linecap="round"/>' +
-  '<circle cx="27" cy="23" r="15.5" fill="white"/>' +
-  '<circle cx="27" cy="23" r="15.5" fill="none" stroke="rgba(185,28,28,0.15)" stroke-width="1.5"/>' +
-  '<text x="27" y="31" text-anchor="middle" font-size="19" font-family="Segoe UI Emoji,Apple Color Emoji,Noto Color Emoji,sans-serif">&#x1F468;&#x200D;&#x1F527;</text>' +
-  '</svg>'
-)}`
 
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const R = 6371
@@ -120,12 +75,6 @@ function arrivalWindow(enRouteAt?: string, etaMinutes?: number | null): string |
   return loStr.slice(-2) === hiStr.slice(-2) ? `${loStr.replace(/\s?[AP]M$/i, '')} – ${hiStr}` : `${loStr} – ${hiStr}`
 }
 
-function resamplePath(path: { lat: number; lng: number }[], n: number): { lat: number; lng: number }[] {
-  if (path.length === 0) return []
-  if (path.length <= n) return path
-  return Array.from({ length: n }, (_, i) => path[Math.round(i * (path.length - 1) / (n - 1))])
-}
-
 // Arrival threshold in metres
 const ARRIVAL_THRESHOLD_M = 20
 
@@ -145,14 +94,6 @@ interface ActiveJobProps {
   onJobCompleted: () => void
   onBack?: () => void
 }
-
-// Amber garage destination pin (a little house glyph)
-const GARAGE_PIN_SVG = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="54" viewBox="0 0 44 54">' +
-    '<path d="M22 2C11 2 2 11 2 22C2 36 22 52 22 52C22 52 42 36 42 22C42 11 33 2 22 2Z" fill="#F59E0B" stroke="#fff" stroke-width="2.5"/>' +
-    '<path d="M13 27 v-8 l9 -6 9 6 v8 z" fill="#fff"/>' +
-    '<rect x="19" y="22" width="6" height="5" fill="#F59E0B"/></svg>'
-)}`
 
 // Treat a naive timestamp as UTC so it renders correctly in EAT.
 function normTs(ts: string): string {
@@ -226,47 +167,8 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
   const [ratingSubmitted, setRatingSubmitted] = useState(false)
   const [ratingDismissed, setRatingDismissed] = useState(false)
 
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null)
-  const [mapExpanded, setMapExpanded] = useState(false)
   const lastLocationSentRef = useRef(0)
-  const routeRequestedRef = useRef(false) // route fetched once, then fixed
-  // Route-following: snap the mechanic pin onto the fixed road route and shrink
-  // the drawn route to just the remaining road as the mechanic advances.
-  const routeMetaRef    = useRef<RouteMeta | null>(null)
-  const progressDistRef = useRef(0) // monotonic km travelled along the route
-  const [mechSnapped, setMechSnapped] = useState<LL | null>(null)
-  const [remaining,   setRemaining]   = useState<LL[] | null>(null)
-  const mapRef    = useRef<google.maps.Map | null>(null)
-  const mapRefExp = useRef<google.maps.Map | null>(null)
   // Refs for current position values — used inside intervals to avoid stale closures
-  const effectiveLatRef = useRef<number | null>(null)
-  const effectiveLngRef = useRef<number | null>(null)
-
-  const { isLoaded, loadError } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '',
-  })
-
-  // Fallback: if Maps script hasn't loaded after 12 s, stop waiting
-  const [mapTimedOut, setMapTimedOut] = useState(false)
-  useEffect(() => {
-    if (isLoaded) return
-    const t = setTimeout(() => setMapTimedOut(true), 12000)
-    return () => clearTimeout(t)
-  }, [isLoaded])
-
-  // Marker icons — built ONCE per maps-load. Recreating the icon object on every
-  // render (the map re-renders several times a second) made iOS Safari silently
-  // drop the driver Marker; a stable icon reference keeps all pins on the map.
-  const mapIcons = useMemo(() => {
-    const g = (window as any).google?.maps
-    if (!isLoaded || !g) return null
-    return {
-      driver:   { url: DRIVER_PIN_SVG,   scaledSize: new g.Size(44, 56), anchor: new g.Point(22, 53) } as google.maps.Icon,
-      provider: { url: MECHANIC_CAR_SVG, scaledSize: new g.Size(43, 53), anchor: new g.Point(21.5, 50.5) } as google.maps.Icon,
-      garage:   { url: GARAGE_PIN_SVG,   scaledSize: new g.Size(40, 49), anchor: new g.Point(20, 48) } as google.maps.Icon,
-    }
-  }, [isLoaded])
-
   // Mechanic-initiated cancellation (with reason + suspension warning).
   const [cancelOpen, setCancelOpen] = useState(false)
   const handleCancelled = useCallback((outcome: { strikes: number; suspended: boolean; limit: number; suspension_count?: number } | null) => {
@@ -307,12 +209,12 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
     }
   }, [lastMessage, activeRequest?.id])
 
-  const { lat: myLat, lng: myLng } = useLocation(!!activeRequest && simPos === null)
+  const { lat: myLat, lng: myLng } = useLocation(!!activeRequest)
   // In dev, fall back to Makerere University when the laptop has no real GPS
   const DEV_LAT = import.meta.env.DEV ? (Number(import.meta.env.VITE_DEV_MECH_LAT) || 0.3347) : null
   const DEV_LNG = import.meta.env.DEV ? (Number(import.meta.env.VITE_DEV_MECH_LNG) || 32.5679) : null
-  const effectiveLat = simPos?.lat ?? myLat ?? DEV_LAT ?? undefined
-  const effectiveLng = simPos?.lng ?? myLng ?? DEV_LNG ?? undefined
+  const effectiveLat = myLat ?? DEV_LAT ?? undefined
+  const effectiveLng = myLng ?? DEV_LNG ?? undefined
   // Keep refs in sync so interval callbacks always read the latest position
   useEffect(() => { effectiveLatRef.current = effectiveLat ?? null }, [effectiveLat])
   useEffect(() => { effectiveLngRef.current = effectiveLng ?? null }, [effectiveLng])
@@ -336,31 +238,7 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
       setLocationText('Locating driver…')
     }
     arrivedTriggeredRef.current = false
-    // Fresh job → drop the old route so it's re-fetched and progress restarts.
-    routeRequestedRef.current = false
-    routeMetaRef.current = null
-    progressDistRef.current = 0
-    setDirections(null)
-    setMechSnapped(null)
-    setRemaining(null)
   }, [activeRequest?.id])
-
-  // Snap the mechanic pin onto the route and recompute the remaining road
-  // whenever the mechanic's position (or the route) changes. Progress is
-  // monotonic so the pin never slides backwards along the road.
-  useEffect(() => {
-    const meta = routeMetaRef.current
-    if (!meta || effectiveLat == null || effectiveLng == null || activeRequest?.status !== 'en_route') {
-      setMechSnapped(null)
-      setRemaining(null)
-      return
-    }
-    const proj = projectToRoute(meta, { lat: effectiveLat, lng: effectiveLng })
-    const dist = Math.max(progressDistRef.current, proj.dist)
-    progressDistRef.current = dist
-    setMechSnapped(pointAtDist(meta, dist))
-    setRemaining(remainingPath(meta, dist))
-  }, [effectiveLat, effectiveLng, directions, activeRequest?.status])
 
   // Keep refs up-to-date (used inside intervals where closure would otherwise be stale)
   useEffect(() => { activeRequestRef.current = activeRequest }, [activeRequest])
@@ -482,7 +360,7 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
   // Broadcast own location every 10s + auto-detect arrival when en_route
   // Skipped when GPS simulator is active (simulator handles its own broadcasts)
   useEffect(() => {
-    if (!activeRequest || myLat == null || myLng == null || simPos !== null) return
+    if (!activeRequest || myLat == null || myLng == null) return
     const now = Date.now()
     if (now - lastLocationSentRef.current < 10000) return
     lastLocationSentRef.current = now
@@ -502,130 +380,7 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
         setTimeout(() => setArrivedToast(false), 4000)
       }
     }
-  }, [myLat, myLng, simPos, activeRequest, sendMessage, driverPos, updateStatus])
-
-  // Once the user zooms/pans, stop auto-fitting so the map stays where they put it
-  const userInteractedRef    = useRef(false)
-  const userInteractedExpRef = useRef(false)
-  const initialFitDoneRef    = useRef(false)
-  const initialFitDoneExpRef = useRef(false)
-
-  const fitBounds = useCallback((map: google.maps.Map | null, force = false) => {
-    if (!map || !isLoaded) return
-    const isExp = map === mapRefExp.current
-    if (!force && (isExp ? userInteractedExpRef.current : userInteractedRef.current)) return
-    // Frame the driver + the (simulated) route start so the whole journey shows.
-    const mechFrame: LL | null = sim.start ?? sim.mechPos ??
-      (effectiveLat != null && effectiveLng != null ? { lat: effectiveLat, lng: effectiveLng } : null)
-    if (driverMarkerPos && mechFrame) {
-      const bounds = new (window as any).google.maps.LatLngBounds()
-      bounds.extend(driverMarkerPos)
-      bounds.extend(mechFrame)
-      map.fitBounds(bounds, 60)
-    } else if (driverMarkerPos) {
-      map.setCenter(driverMarkerPos)
-      map.setZoom(16)
-    } else if (mechFrame) {
-      map.setCenter(mechFrame)
-      map.setZoom(16)
-    }
-    // Only mark the initial fit "done" once BOTH ends are framed. On a phone the
-    // driver location / route arrive AFTER the map loads, so marking it done with
-    // just the mechanic framed would park the driver pin permanently off-screen.
-    if (!driverMarkerPos || !mechFrame) return
-    if (isExp) initialFitDoneExpRef.current = true
-    else       initialFitDoneRef.current    = true
-  }, [driverMarkerPos, effectiveLat, effectiveLng, sim.start, sim.mechPos, isLoaded])
-
-  // Re-frame as soon as the positions become available (the one-time onMapLoad
-  // fit can run before geolocation / the driver position has arrived).
-  useEffect(() => {
-    if (!initialFitDoneRef.current) fitBounds(mapRef.current)
-  }, [fitBounds])
-  useEffect(() => {
-    if (!initialFitDoneExpRef.current) fitBounds(mapRefExp.current)
-  }, [fitBounds])
-
-  const onMapLoad = useCallback((map: google.maps.Map) => {
-    mapRef.current = map
-    fitBounds(map, true)
-    map.addListener('dragstart',    () => { userInteractedRef.current = true })
-    map.addListener('zoom_changed', () => { userInteractedRef.current = true })
-  }, [fitBounds])
-
-  const onMapLoadExp = useCallback((map: google.maps.Map) => {
-    mapRefExp.current = map
-    fitBounds(map, true)
-    map.addListener('dragstart',    () => { userInteractedExpRef.current = true })
-    map.addListener('zoom_changed', () => { userInteractedExpRef.current = true })
-  }, [fitBounds])
-
-  // On arrival, re-frame the map tightly around the two pins (the journey route
-  // is hidden once arrived, so fit to driver + mechanic which are now close).
-  useEffect(() => {
-    if (activeRequest?.status !== 'arrived') return
-    const fit = (map: google.maps.Map | null) => {
-      if (!map || !isLoaded || !driverMarkerPos || effectiveLat == null || effectiveLng == null) return
-      const b = new (window as any).google.maps.LatLngBounds()
-      b.extend(driverMarkerPos)
-      b.extend({ lat: effectiveLat, lng: effectiveLng })
-      map.fitBounds(b, 80)
-      // Both pins are close on arrival — cap the zoom so it isn't street-microscopic
-      const z = map.getZoom()
-      if (z != null && z > 17) map.setZoom(17)
-    }
-    fit(mapRef.current)
-    fit(mapRefExp.current)
-  }, [activeRequest?.status, driverMarkerPos, effectiveLat, effectiveLng, isLoaded])
-
-  // Only auto-fit when coords first become available (before user has interacted)
-  useEffect(() => {
-    if (!initialFitDoneRef.current) fitBounds(mapRef.current)
-  }, [fitBounds])
-  useEffect(() => {
-    if (!initialFitDoneExpRef.current) fitBounds(mapRefExp.current)
-  }, [fitBounds])
-
-  // Re-fit once when driverPos first becomes known (initial positioning only)
-  useEffect(() => {
-    if (driverPos && mapRef.current && isLoaded && !userInteractedRef.current) fitBounds(mapRef.current)
-  }, [driverPos, isLoaded, fitBounds])
-
-  // Fetch the driving route ONCE at the start, then keep it fixed (shortest route
-  // drawn from the mechanic's starting point to the driver — it does not redraw
-  // as the mechanic moves).
-  useEffect(() => {
-    if (!isLoaded || !driverPos || effectiveLat == null || effectiveLng == null) return
-    if (routeRequestedRef.current) return
-    routeRequestedRef.current = true
-    const g = (window as any).google.maps
-    new g.DirectionsService().route({
-      origin:      { lat: effectiveLat, lng: effectiveLng },
-      destination: driverPos,
-      travelMode:  g.TravelMode.DRIVING,
-      provideRouteAlternatives: true, // pick the SHORTEST by distance
-    }, (result: google.maps.DirectionsResult | null, status: string) => {
-      if (status === 'OK' && result) {
-        // Put the shortest-distance route first so the renderer draws it
-        let best = 0, bestM = Infinity
-        result.routes.forEach((r, i) => {
-          const m = r.legs.reduce((s: number, leg: any) => s + (leg.distance?.value ?? 0), 0)
-          if (m < bestM) { bestM = m; best = i }
-        })
-        if (best > 0) { const [r] = result.routes.splice(best, 1); result.routes.unshift(r) }
-        setDirections(result) // fixed shortest road polyline; ETA comes from estimateEta()
-        // Build the route metadata used to snap the pin + shrink the drawn route.
-        const path: LL[] = (result.routes[0]?.overview_path ?? []).map((p: google.maps.LatLng) => ({ lat: p.lat(), lng: p.lng() }))
-        routeMetaRef.current = buildRouteMeta(path)
-        progressDistRef.current = 0
-        const rb = result.routes[0]?.bounds
-        if (rb && mapRef.current && !userInteractedRef.current) { mapRef.current.fitBounds(rb, 50); initialFitDoneRef.current = true }
-        if (rb && mapRefExp.current && !userInteractedExpRef.current) { mapRefExp.current.fitBounds(rb, 50); initialFitDoneExpRef.current = true }
-      } else {
-        routeRequestedRef.current = false // allow a retry
-      }
-    })
-  }, [isLoaded, driverPos, effectiveLat, effectiveLng])
+  }, [myLat, myLng, activeRequest, sendMessage, driverPos, updateStatus])
 
   // Broadcast mechanic position every 15s when en_route — ensures driver map updates even if GPS hasn't moved
   useEffect(() => {
@@ -686,97 +441,6 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
     setQuoteDesc(diagDescription)
     setShowDiagnostic(false)
   }
-
-  // Legacy broadcast simulation — superseded by the deterministic useJobSim,
-  // which both apps render identically. Disabled to avoid double-driving the pin.
-  useEffect(() => {
-    if (true) return // eslint-disable-line no-constant-condition
-    if (!import.meta.env.DEV || !isLoaded) return
-    if (activeRequest?.status !== 'en_route') return
-    if (simIntervalRef.current) return // already running
-
-    fiveMinMsgSentRef.current = false
-    const dp = driverPosRef.current
-    if (!dp) return // driver position not yet known
-
-    const startLat = dp.lat + 0.027   // ~3 km north
-    const startLng = dp.lng + 0.027   // ~3 km east
-
-    const g = (window as any).google.maps
-    setSimPos({ lat: startLat, lng: startLng })
-
-    const req = activeRequestRef.current
-    if (req) {
-      sendMessage({ type: 'location_update', role: 'mechanic', lat: startLat, lng: startLng, service_request_id: req.id })
-      sendMessage({ type: 'chat_message', service_request_id: String(req.id), message: "🚗 I'm on my way to your location!", sender_id: 'system' })
-    }
-
-    let cancelled = false
-
-    const launchInterval = (steps: { lat: number; lng: number }[]) => {
-      let idx = 0
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      simIntervalRef.current = setInterval(() => {
-        if (idx >= steps.length - 1) {
-          clearInterval(simIntervalRef.current!)
-          simIntervalRef.current = null
-          setSimPos(null)
-          return
-        }
-        idx++
-        const pos = steps[idx]
-        setSimPos(pos)
-        const curReq = activeRequestRef.current
-        if (!curReq) return
-        sendMessage({ type: 'location_update', role: 'mechanic', lat: pos.lat, lng: pos.lng, service_request_id: curReq.id })
-        if (curReq.status === 'en_route' && !arrivedTriggeredRef.current) {
-          const distM = haversineKm(pos.lat, pos.lng, dp.lat, dp.lng) * 1000
-          if (distM <= ARRIVAL_THRESHOLD_M) {
-            arrivedTriggeredRef.current = true
-            clearInterval(simIntervalRef.current!)
-            simIntervalRef.current = null
-            setSimPos(null)
-            updateStatus('arrived')
-            setArrivedToast(true)
-            setTimeout(() => setArrivedToast(false), 4000)
-          }
-        }
-      }, 4000) // 120 steps × 4 s ≈ 8 min journey
-    }
-
-    new g.DirectionsService().route(
-      { origin: { lat: startLat, lng: startLng }, destination: dp, travelMode: g.TravelMode.DRIVING },
-      (result: google.maps.DirectionsResult | null, status: string) => {
-        if (cancelled) return
-        let steps: { lat: number; lng: number }[]
-        if (status === 'OK' && result) {
-          const raw: { lat: number; lng: number }[] = []
-          result.routes[0]?.overview_path?.forEach((pt: google.maps.LatLng) =>
-            raw.push({ lat: pt.lat(), lng: pt.lng() })
-          )
-          steps = resamplePath(raw.length > 1 ? raw : [{ lat: startLat, lng: startLng }, dp], 120)
-        } else {
-          // Straight-line fallback if Directions API fails
-          steps = Array.from({ length: 121 }, (_, i) => ({
-            lat: startLat + (dp.lat - startLat) * (i / 120),
-            lng: startLng + (dp.lng - startLng) * (i / 120),
-          }))
-        }
-        launchInterval(steps)
-      }
-    )
-
-    return () => {
-      cancelled = true
-      if (simIntervalRef.current) {
-        clearInterval(simIntervalRef.current)
-        simIntervalRef.current = null
-      }
-      setSimPos(null)
-    }
-  // sendMessage and updateStatus are stable; driverPos read via ref
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeRequest?.status, isLoaded])
 
   if (!activeRequest) {
     return <EmptyState icon={Navigation2} title="No Active Job" subtitle="Accept a request from the Jobs tab to see it here." />
@@ -1016,7 +680,7 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
                         ))}
                       </div>
                     )}
-                    {aiNote && (
+                    {MOTOBOT_ENABLED && aiNote && (
                       <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 10, background: `${C.amber}14`, border: `1px solid ${C.amber}33` }}>
                         <span style={{ fontSize: 11, fontWeight: 800, color: C.amber }}>🤖 MOTOBOT: </span>
                         <span style={{ fontSize: 12.5, color: C.textHi }}>{aiNote}</span>
@@ -1056,7 +720,7 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
           </div>
 
           {/* AI diagnosis — only once the mechanic has actually started the service */}
-          {status === 'service_started' && (
+          {MOTOBOT_ENABLED && status === 'service_started' && (
             <div style={{ marginBottom: 12 }}>
               <button
                 onClick={() => setShowDiagnostic(true)}
@@ -1523,7 +1187,7 @@ export default function ActiveJob({ activeRequest, sendMessage, lastMessage, onJ
       )}
 
       {/* AI Diagnostic Tool overlay */}
-      {showDiagnostic && activeRequest && (
+      {MOTOBOT_ENABLED && showDiagnostic && activeRequest && (
         <DiagnosticTool
           serviceType={activeRequest.issue_type ?? activeRequest.service_type ?? 'vehicle fault'}
           description={activeRequest.description ?? ''}

@@ -5,6 +5,7 @@
 import { useState, useMemo } from 'react'
 import type { ElementType } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { MOTOBOT_ENABLED } from '@/config/features'
 import {
   ArrowLeft, Search, X, ChevronDown, ChevronRight, AlertTriangle, ListChecks,
   Youtube, Bot, Cog, CircleDot, Battery, Disc3, Zap, Droplets, Settings2, Car, Fuel, Wind,
@@ -261,10 +262,10 @@ export default function SelfFixGuides() {
                         style={{ marginTop: 14, width: '100%', height: 44, borderRadius: 12, background: YT_RED, color: '#fff', fontWeight: 800, fontSize: 13.5, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, boxShadow: '0 4px 14px rgba(255,0,0,0.28)', boxSizing: 'border-box' }}>
                         <Youtube style={{ width: 19, height: 19 }} /> Watch how-to on YouTube
                       </a>
-                      <button onClick={() => navigate('/fault-chat')}
+                      {MOTOBOT_ENABLED && <button onClick={() => navigate('/fault-chat')}
                         style={{ marginTop: 8, width: '100%', height: 40, borderRadius: 12, background: `${AMBER}15`, border: `1px solid ${AMBER}38`, color: AMBER, fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                         <Bot style={{ width: 15, height: 15 }} /> Ask MOTOBOT about this
-                      </button>
+                      </button>}
                     </div>
                   )}
                 </div>

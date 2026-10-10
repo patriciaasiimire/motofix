@@ -54,7 +54,11 @@ def _require_secret() -> str:
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
-MECHANICS_SERVICE_URL = os.getenv("MECHANICS_SERVICE_URL", "http://localhost:8002")
+MECHANICS_SERVICE_URL = (
+    os.getenv("MECHANICS_SERVICE_URL", "http://127.0.0.1:8002")
+    .replace("://localhost", "://127.0.0.1", 1)
+    .rstrip("/")
+)
 LAUNCH_MODE = os.getenv("LAUNCH_MODE", "false").strip().lower() == "true"
 
 pool: Optional[asyncpg.Pool] = None
@@ -198,7 +202,7 @@ async def match_mechanics(
             excluded_ids.extend(r["mechanic_id"] for r in rows)
 
     # Fetch verified mechanics from the Mechanic Verification Service
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         try:
             resp = await client.get(
                 f"{MECHANICS_SERVICE_URL}/mechanics",
@@ -207,7 +211,28 @@ async def match_mechanics(
             )
             resp.raise_for_status()
             payload = resp.json()
-            mechanics = payload if isinstance(payload, list) else payload.get("mechanics", [])
+            if isinstance(payload, list):
+                mechanics = payload
+            elif isinstance(payload, dict) and isinstance(payload.get("mechanics"), list):
+                mechanics = payload["mechanics"]
+            else:
+                logger.error("Mechanic Verification Service returned an invalid mechanics payload")
+                raise HTTPException(
+                    status_code=502,
+                    detail="Mechanic Verification Service returned an invalid mechanics list.",
+                )
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "Mechanic Verification Service returned HTTP %s: %s",
+                exc.response.status_code,
+                exc.response.text[:300],
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Mechanic Verification Service returned HTTP {exc.response.status_code}.",
+            )
         except Exception as exc:
             logger.error("Failed to reach Mechanic Verification Service: %s", exc)
             raise HTTPException(

@@ -4,13 +4,12 @@
 // How login persists: on success we save the token + user in the browser
 // (localStorage) so the user stays logged in across refreshes. On startup it shows
 // the cached user instantly (no flicker) then quietly re-checks with the server via
-// /auth/me — only logging the user out if the server says the token is truly invalid
-// (a 401), not on a flaky network. Login/logout fire a 'motofix:auth-changed' event
+// /auth/me without ending the local session on verification failures. Login/logout
+// fire a 'motofix:auth-changed' event
 // so other parts of the app (requests, websocket) can react.
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { authService } from '@/config/api';
-import { startActivity, clearInactivity } from '@/utils/sessionTimeout';
 
 const STORAGE_SETTINGS_KEY = 'motofix_settings';
 
@@ -20,8 +19,6 @@ function mergeServerPreferences(serverPrefs: Record<string, unknown>) {
     localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify({ ...local, ...serverPrefs }));
   } catch { /* ignore */ }
 }
-import { toast } from 'sonner';
-
 interface User {
   id?: string;
   phone: string;
@@ -55,10 +52,10 @@ const getStoredUser = (): User | null => {
 export function useAuth() {
   const [user, setUser] = useState<User | null>(() => getStoredUser());
   const [isLoading, setIsLoading] = useState(() => {
-    return !(localStorage.getItem(STORAGE_TOKEN_KEY) && getStoredUser());
+    return !localStorage.getItem(STORAGE_TOKEN_KEY);
   });
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return !!(localStorage.getItem(STORAGE_TOKEN_KEY) && getStoredUser());
+    return !!localStorage.getItem(STORAGE_TOKEN_KEY);
   });
   const authCheckInProgressRef = useRef(false);
   const authCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -116,30 +113,17 @@ export function useAuth() {
     } catch (error: any) {
       console.error('❌ Auth check failed:', error?.response?.status, error?.message);
       
-      // Only clear storage on 401 (unauthorized), not on network errors
-      if (error.response?.status === 401) {
-        console.log('⚠️ Token expired or invalid - clearing storage');
-        localStorage.removeItem(STORAGE_TOKEN_KEY);
-        localStorage.removeItem(STORAGE_USER_KEY);
-        setIsAuthenticated(false);
-        setUser(null);
-        
-        // Show user-friendly error message
-        if (toast) {
-          toast.error('Session expired – please login again');
-        }
-      } else {
-        // For other errors (network, 500, etc), keep the cached session
-        console.log('⚠️ Auth check failed but keeping cached session:', error?.message);
-        const storedUser = localStorage.getItem(STORAGE_USER_KEY);
-        if (storedUser) {
-          try {
-            setUser(JSON.parse(storedUser));
-            setIsAuthenticated(true);
-            console.log('✅ Using cached user session');
-          } catch (e) {
-            console.error('Failed to parse cached user', e);
-          }
+      // Verification failures never end the local session; only explicit logout
+      // or clearing browser storage removes the saved credentials.
+      console.log('⚠️ Auth check failed but keeping cached session:', error?.message);
+      const storedUser = localStorage.getItem(STORAGE_USER_KEY);
+      if (storedUser) {
+        try {
+          setUser(JSON.parse(storedUser));
+          setIsAuthenticated(true);
+          console.log('✅ Using cached user session');
+        } catch (e) {
+          console.error('Failed to parse cached user', e);
         }
       }
     } finally {
@@ -220,8 +204,6 @@ export function useAuth() {
       console.log('✅ User saved to localStorage');
 
       sessionStorage.removeItem('motofix_driver_greeting');  // fresh home-screen headline each login
-      clearInactivity();  // drop any stale inactivity flag
-      startActivity();    // begin the 15-minute idle clock for this session
 
       setUser(userData);
       setIsAuthenticated(true);
@@ -249,7 +231,6 @@ export function useAuth() {
     localStorage.removeItem(STORAGE_TOKEN_KEY);
     localStorage.removeItem(STORAGE_USER_KEY);
     localStorage.removeItem(STORAGE_LAST_AUTH_CHECK);
-    clearInactivity();
     console.log('✅ localStorage cleared');
     
     // Clear state

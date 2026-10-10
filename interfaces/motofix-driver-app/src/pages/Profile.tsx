@@ -245,7 +245,7 @@ export default function Profile() {
   const handleLogout = () => {
     logout();
     toast.success('Logged out successfully');
-    navigate('/welcome', { replace: true });
+    navigate('/login', { replace: true });
   };
 
   return (

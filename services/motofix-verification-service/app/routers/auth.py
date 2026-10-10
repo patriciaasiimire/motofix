@@ -10,7 +10,7 @@ import secrets
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from jose import jwt, JWTError
 import asyncpg
 import hashlib
@@ -74,18 +74,26 @@ class LoginRequest(BaseModel):
     password: str
 
 class RegisterRequest(BaseModel):
-    full_name: str
+    name: Optional[str] = None
+    full_name: Optional[str] = None
     phone: str
     password: Optional[str] = None
-    location: Optional[str] = ""
+    location: Optional[str] = None
     specialty: Optional[str] = "General Repair"
     vehicle_type: Optional[str] = "car"
+    service_area_ids: list[int] = Field(default_factory=list)
 
 class TokenResponse(BaseModel):
     token: str
     mechanic_id: int
     name: str
     phone: str
+    location: Optional[str] = None
+    service_area_ids: list[int] = Field(default_factory=list)
+    is_verified: bool = False
+    is_available: bool = True
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class AvailabilityUpdate(BaseModel):
     is_available: bool
@@ -104,6 +112,12 @@ class FcmTokenUpdate(BaseModel):
 @router.post("/auth/register", response_model=TokenResponse)
 async def register(body: RegisterRequest):
     """Register a new mechanic account."""
+    mechanic_name = (body.name or body.full_name or "").strip()
+    if not mechanic_name:
+        raise HTTPException(status_code=422, detail="name is required")
+    phone = body.phone.strip()
+    if not phone:
+        raise HTTPException(status_code=422, detail="phone is required")
     try:
         secret = _get_secret()
     except RuntimeError as e:
@@ -115,7 +129,7 @@ async def register(body: RegisterRequest):
         # Check phone not already taken
         try:
             existing = await db.fetchrow(
-                "SELECT id FROM mechanics WHERE phone = $1", body.phone
+                "SELECT id FROM mechanics WHERE phone = $1", phone
             )
             if existing:
                 raise HTTPException(status_code=409, detail="Phone number already registered")
@@ -133,15 +147,18 @@ async def register(body: RegisterRequest):
                 """
                 INSERT INTO mechanics
                     (name, phone, location, specialty, vehicle_type,
-                     is_available, rating, total_ratings, is_verified, jobs_completed, password_hash)
-                VALUES ($1, $2, $3, $4, $5, true, 0, 0, false, 0, $6)
-                RETURNING id, name, phone
+                     service_area_ids, is_available, rating, total_ratings,
+                     is_verified, jobs_completed, password_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, true, 0, 0, false, 0, $7)
+                RETURNING id, name, phone, location, service_area_ids,
+                          is_verified, is_available, latitude, longitude
                 """,
-                body.full_name,
-                body.phone,
-                body.location or "",
+                mechanic_name,
+                phone,
+                body.location,
                 body.specialty or "General Repair",
                 body.vehicle_type or "car",
+                body.service_area_ids,
                 hashed,
             )
         except Exception as e:
@@ -163,6 +180,12 @@ async def register(body: RegisterRequest):
             mechanic_id=row["id"],
             name=row["name"],
             phone=row["phone"],
+            location=row["location"],
+            service_area_ids=list(row["service_area_ids"] or []),
+            is_verified=row["is_verified"],
+            is_available=row["is_available"],
+            latitude=row["latitude"],
+            longitude=row["longitude"],
         )
 
 

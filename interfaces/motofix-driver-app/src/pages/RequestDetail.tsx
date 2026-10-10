@@ -12,7 +12,8 @@ import {
   DollarSign, Check, X, Smartphone, Maximize2, Minimize2,
   AlertTriangle, MessageCircle, Star,
 } from 'lucide-react';
-import { useLoadScript, GoogleMap, Marker, Polyline } from '@react-google-maps/api';
+import L from 'leaflet';
+import { MapContainer, Marker, Polyline, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import { requestsService, paymentsService, mechanicService, chatService } from '@/config/api';
 import type { MechanicPublicProfile } from '@/config/api';
 import MechanicAssignedCard from '@/components/MechanicAssignedCard';
@@ -64,6 +65,20 @@ function minutesBetween(a?: string, b?: string): number | null {
   if (!Number.isFinite(ta) || !Number.isFinite(tb)) return null;
   const mins = Math.round((tb - ta) / 60000);
   return Number.isFinite(mins) ? Math.max(0, mins) : null;
+}
+
+function normalizeRequest(value: unknown): Request | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.id !== 'string' && typeof raw.id !== 'number') return null;
+  return {
+    ...raw,
+    id: raw.id,
+    service_type: typeof raw.service_type === 'string' ? raw.service_type : 'Roadside assistance',
+    location: typeof raw.location === 'string' ? raw.location : '',
+    description: typeof raw.description === 'string' ? raw.description : '',
+    status: typeof raw.status === 'string' ? raw.status : 'pending',
+  };
 }
 
 // ─── Haversine distance (km) ──────────────────────────────────────────────────
@@ -128,6 +143,15 @@ function arrivalWindow(enRouteAt?: string, etaMinutes?: number): string | null {
 type LL = { lat: number; lng: number };
 const FALLBACK_CENTER: LL = { lat: 0.3476, lng: 32.5825 }; // Kampala — only used before any GPS is known
 
+function isValidMapPoint(lat: unknown, lng: unknown): lat is number {
+  return typeof lat === 'number' && Number.isFinite(lat) && lat >= -90 && lat <= 90 &&
+    typeof lng === 'number' && Number.isFinite(lng) && lng >= -180 && lng <= 180;
+}
+
+function isValidPoint(point: LL | null | undefined): point is LL {
+  return !!point && isValidMapPoint(point.lat, point.lng);
+}
+
 // ─── Route metadata + "point along the route" ────────────────────────────────
 // Lets us place the mechanic pin at a fraction of the way along the fixed route,
 // so it always sits ON the line and only advances toward the driver.
@@ -177,27 +201,6 @@ function remainingAlong(raw: LL, meta: RouteMeta | null): LL[] | null {
 }
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
-const MAP_CONTAINER_STYLE = { width: '100%', height: '100%' };
-
-// Clean light map — strips POI/transit clutter, keeps standard Google Maps look
-const MAP_LIGHT_STYLES = [
-  { featureType: 'poi',     stylers: [{ visibility: 'off' }] },
-  { featureType: 'transit', stylers: [{ visibility: 'off' }] },
-];
-
-const MAP_OPTIONS: google.maps.MapOptions = {
-  disableDefaultUI: true,
-  gestureHandling: 'cooperative',
-  clickableIcons: false,
-  zoomControl: true,
-  styles: MAP_LIGHT_STYLES as google.maps.MapTypeStyle[],
-};
-const MAP_OPTIONS_FULL: google.maps.MapOptions = {
-  ...MAP_OPTIONS,
-  zoomControl: true,
-  fullscreenControl: false,
-};
-
 // Driver: blue map pin with person silhouette — anchor at bottom tip (22, 53)
 const DRIVER_PIN_SVG = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="56" viewBox="0 0 44 56">' +
@@ -248,6 +251,44 @@ const GLASS_BADGE: React.CSSProperties = {
   backdropFilter: 'blur(4px)',
 };
 
+function RequestMapViewport({
+  points,
+  driverPos,
+  arrived,
+  interactedRef,
+}: {
+  points: LL[];
+  driverPos: LL | null;
+  arrived: boolean;
+  interactedRef: { current: boolean };
+}) {
+  const map = useMap();
+  const pointsKey = points.map(point => `${point.lat},${point.lng}`).join('|');
+
+  useEffect(() => {
+    if (arrived && driverPos) {
+      map.setView([driverPos.lat, driverPos.lng], 16);
+      return;
+    }
+    if (interactedRef.current || points.length === 0) return;
+    if (points.length === 1) {
+      map.setView([points[0].lat, points[0].lng], 16);
+    } else {
+      map.fitBounds(
+        L.latLngBounds(points.map(point => L.latLng(point.lat, point.lng))),
+        { padding: [40, 40] },
+      );
+    }
+  }, [arrived, driverPos?.lat, driverPos?.lng, map, pointsKey]);
+
+  useMapEvents({
+    dragstart: () => { interactedRef.current = true; },
+    zoomstart: () => { interactedRef.current = true; },
+  });
+
+  return null;
+}
+
 function MapOverlays({
   expanded, distText, driverPos, mechPos,
   onToggle,
@@ -295,11 +336,12 @@ function MapOverlays({
 }
 
 function TrackingMap({
-  driverLat, driverLng,
+  driverLat, driverLng, mechanicLat, mechanicLng,
   arrived, assigned, simActive, requestId, enRouteAt,
   onRouteUpdate, onProgress,
 }: {
   driverLat?: number | null; driverLng?: number | null;
+  mechanicLat?: number | null; mechanicLng?: number | null;
   arrived?: boolean;
   assigned?: boolean;       // mechanic accepted (accepted/en_route) → draw full route + both pins
   simActive?: boolean;      // en_route → advance the mechanic pin
@@ -308,23 +350,11 @@ function TrackingMap({
   onRouteUpdate?: (info: { duration: string; distance: string } | null) => void;
   onProgress?: (fraction: number) => void;
 }) {
-  const { isLoaded } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '',
-  });
-  const mapRef    = useRef<google.maps.Map | null>(null);
-  const mapRefExp = useRef<google.maps.Map | null>(null);
-  // Once the user zooms/pans, stop auto-fitting so the map stays where they put it
-  const userInteractedRef    = useRef(false);
-  const userInteractedExpRef = useRef(false);
-  // Track whether each map has had its initial fit
-  const initialFitDoneRef    = useRef(false);
-  const initialFitDoneExpRef = useRef(false);
-
   const [expanded, setExpanded]     = useState(false);
-  const initialCenterRef  = useRef<LL | null>(null); // stable map center (set once)
-
-  const hasDriver = driverLat != null && driverLng != null;
-  const driverPos = hasDriver ? { lat: driverLat as number, lng: driverLng as number } : null;
+  const userInteractedRef = useRef(false);
+  const userInteractedExpRef = useRef(false);
+  const hasDriver = isValidMapPoint(driverLat, driverLng);
+  const driverPos = hasDriver ? { lat: driverLat, lng: driverLng } : null;
   const enRoute     = !!simActive && !arrived;             // pin advances
   const showJourney = !!(assigned ?? simActive) && !arrived; // route + both pins drawn
 
@@ -332,8 +362,7 @@ function TrackingMap({
   // (monotonic) ETA from the request location + id + en_route time. The route is
   // drawn as soon as the job is accepted; the pin only advances once en route.
   const sim = useJobSim({
-    isLoaded,
-    active: showJourney,
+    active: showJourney && !!driverPos,
     advancing: enRoute,
     driver: driverPos,
     seed: String(requestId ?? ''),
@@ -342,7 +371,11 @@ function TrackingMap({
 
   // The mechanic marker is parked at the route start while accepted, rides the route
   // while en route, and once arrived it sits with the driver.
-  const mechDisplay = arrived ? driverPos : (sim.mechPos ?? null);
+  const liveMechanicPos = isValidMapPoint(mechanicLat, mechanicLng)
+    ? { lat: mechanicLat, lng: mechanicLng }
+    : null;
+  const mechDisplayCandidate = arrived ? driverPos : (liveMechanicPos ?? sim.mechPos ?? null);
+  const mechDisplay = isValidPoint(mechDisplayCandidate) ? mechDisplayCandidate : null;
   // Draw the route ONLY during the journey — sim.remaining stays populated from the
   // cached route after arrival, so without this gate the line lingers once arrived.
   const remainingRoute = showJourney ? sim.remaining : null;
@@ -358,57 +391,51 @@ function TrackingMap({
     });
   }, [enRoute, sim.etaMinutes, sim.distanceKm, onRouteUpdate]);
 
-  const fitBounds = useCallback((map: google.maps.Map | null, force = false) => {
-    if (!map || !isLoaded) return;
-    const isExp = map === mapRefExp.current;
-    if (!force && (isExp ? userInteractedExpRef.current : userInteractedRef.current)) return;
-    const pts: LL[] = [];
-    if (driverPos) pts.push(driverPos);
-    if (sim.start) pts.push(sim.start);
-    else if (sim.mechPos) pts.push(sim.mechPos);
-    if (pts.length === 0) return;
-    if (pts.length === 1) { map.setCenter(pts[0]); map.setZoom(16); }
-    else {
-      const b = new window.google.maps.LatLngBounds();
-      pts.forEach(p => b.extend(p));
-      map.fitBounds(b, 60);
-    }
-    if (isExp) initialFitDoneExpRef.current = true;
-    else       initialFitDoneRef.current    = true;
-  }, [driverPos, sim.start, sim.mechPos, isLoaded]);
-
-  // Frame the route once the start + driver are known (re-runs as they arrive).
-  useEffect(() => { if (!initialFitDoneRef.current) fitBounds(mapRef.current); }, [fitBounds, sim.ready]);
-  useEffect(() => { if (!initialFitDoneExpRef.current) fitBounds(mapRefExp.current); }, [fitBounds, sim.ready]);
-
-  // On arrival, re-frame around the driver (the mechanic is now with them).
-  useEffect(() => {
-    if (!arrived || !isLoaded || !driverPos) return;
-    const fit = (map: google.maps.Map | null) => { if (map) { map.setCenter(driverPos); map.setZoom(16); } };
-    fit(mapRef.current); fit(mapRefExp.current);
-  }, [arrived, isLoaded, driverPos]);
-
-  if (!isLoaded) return <div className="rounded-2xl bg-muted animate-pulse" style={{ height: 320 }} />;
-
-  if (initialCenterRef.current == null && driverPos) initialCenterRef.current = driverPos;
-  const center = initialCenterRef.current ?? FALLBACK_CENTER;
-
-  const driverIcon: google.maps.Icon = { url: DRIVER_PIN_SVG,   scaledSize: new window.google.maps.Size(35, 45), anchor: new window.google.maps.Point(17.5, 42.5) };
-  const mechIcon:   google.maps.Icon = { url: MECHANIC_CAR_SVG, scaledSize: new window.google.maps.Size(43, 53), anchor: new window.google.maps.Point(21.5, 50.5) };
+  const points = [
+    ...(driverPos ? [driverPos] : []),
+    ...(isValidPoint(sim.start) ? [sim.start] : []),
+    ...(!sim.start && isValidPoint(mechDisplay) ? [mechDisplay] : []),
+  ];
+  const center = driverPos ?? mechDisplay ?? FALLBACK_CENTER;
+  const driverIcon = L.icon({
+    iconUrl: DRIVER_PIN_SVG,
+    iconSize: [35, 45],
+    iconAnchor: [17.5, 42.5],
+  });
+  const mechIcon = L.icon({
+    iconUrl: MECHANIC_CAR_SVG,
+    iconSize: [43, 53],
+    iconAnchor: [21.5, 50.5],
+  });
 
   const distText = (enRoute && sim.distanceKm != null)
     ? (sim.distanceKm >= 1 ? `${sim.distanceKm.toFixed(1)} km` : `${Math.round(sim.distanceKm * 1000)} m`)
     : null;
 
-  const mapChildren = (
+  const mapChildren = (interactedRef: { current: boolean }) => (
     <>
-      {driverPos   && <Marker position={driverPos}   icon={driverIcon} title="Your location" />}
-      {mechDisplay && <Marker position={mechDisplay} icon={mechIcon}   title="Mechanic" />}
-      {remainingRoute && remainingRoute.length >= 2 && (
+      <TileLayer
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        eventHandlers={{ tileerror: () => toast.error('Map tiles could not load. Your request details are still available.') }}
+      />
+      <RequestMapViewport
+        points={points}
+        driverPos={driverPos}
+        arrived={!!arrived}
+        interactedRef={interactedRef}
+      />
+      {driverPos && isValidPoint(driverPos) && (
+        <Marker position={driverPos} icon={driverIcon} title="Your location" />
+      )}
+      {mechDisplay && isValidPoint(mechDisplay) && (
+        <Marker position={mechDisplay} icon={mechIcon} title="Mechanic" />
+      )}
+      {remainingRoute && remainingRoute.length >= 2 && remainingRoute.every(isValidPoint) && (
         // key tracks the journey so the line is re-drawn as the mechanic advances —
         // otherwise its path freezes at the full route and the pin just slides over a
         // static line instead of the road shrinking toward the driver.
-        <Polyline key={`route-${remainingRoute.length}`} path={remainingRoute} options={{ strokeColor: '#F59E0B', strokeWeight: 6, strokeOpacity: 0.9, zIndex: 10 }} />
+        <Polyline key={`route-${remainingRoute.length}`} positions={remainingRoute} pathOptions={{ color: '#F59E0B', weight: 6, opacity: 0.9 }} />
       )}
     </>
   );
@@ -417,30 +444,20 @@ function TrackingMap({
 
   return (
     <>
-      <style>{`
-        .motofix-map .gm-style-cc,
-        .motofix-map a[href^="https://maps.google.com/maps"],
-        .motofix-map .gmnoscreen { display: none !important; }
-      `}</style>
       {/* Collapsed inline map — always mounted so the map instance is never destroyed */}
       <div
         className="motofix-map rounded-2xl overflow-hidden border border-border/50 relative"
         style={{ height: 320, visibility: expanded ? 'hidden' : 'visible' }}
       >
-        <GoogleMap
-          mapContainerStyle={MAP_CONTAINER_STYLE}
-          center={center}
-          zoom={15}
-          options={MAP_OPTIONS}
-          onLoad={m => {
-            mapRef.current = m;
-            fitBounds(m, true);
-            m.addListener('dragstart',    () => { userInteractedRef.current = true; });
-            m.addListener('zoom_changed', () => { userInteractedRef.current = true; });
-          }}
-        >
-          {mapChildren}
-        </GoogleMap>
+        {points.length > 0 ? (
+          <MapContainer center={center} zoom={15} style={{ width: '100%', height: '100%' }}>
+            {mapChildren(userInteractedRef)}
+          </MapContainer>
+        ) : (
+          <div className="flex h-full items-center justify-center bg-muted text-sm text-muted-foreground">
+            Map unavailable
+          </div>
+        )}
         <MapOverlays {...overlayProps} />
       </div>
 
@@ -448,20 +465,15 @@ function TrackingMap({
       {expanded && createPortal(
         <div className="motofix-map" style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000' }}>
           <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
-            <GoogleMap
-              mapContainerStyle={{ width: '100vw', height: '100vh' }}
-              center={center}
-              zoom={15}
-              options={MAP_OPTIONS_FULL}
-              onLoad={m => {
-                mapRefExp.current = m;
-                fitBounds(m, true);
-                m.addListener('dragstart',    () => { userInteractedExpRef.current = true; });
-                m.addListener('zoom_changed', () => { userInteractedExpRef.current = true; });
-              }}
-            >
-              {mapChildren}
-            </GoogleMap>
+            {points.length > 0 ? (
+              <MapContainer center={center} zoom={15} style={{ width: '100vw', height: '100vh' }}>
+                {mapChildren(userInteractedExpRef)}
+              </MapContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center bg-muted text-sm text-muted-foreground">
+                Map unavailable
+              </div>
+            )}
             <MapOverlays {...overlayProps} expanded={true} />
           </div>
         </div>,
@@ -714,11 +726,14 @@ export default function RequestDetail() {
 
   // ── Load request ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const cached = requests.find((r) => String(r.id) === id);
+    const cached = normalizeRequest(requests.find((r) => String(r.id) === id));
     if (cached) { setRequest(cached); setIsLoading(false); }
     if (!id) return;
     requestsService.getById(id)
-      .then((res) => { setRequest(res.data); setIsLoading(false); })
+      .then((res) => {
+        setRequest(normalizeRequest(res.data));
+        setIsLoading(false);
+      })
       .catch(() => { if (!cached) setIsLoading(false); });
   }, [id, requests]);
 
@@ -743,7 +758,7 @@ export default function RequestDetail() {
 
   // ── Parse stored request coords (used as map fallback only) ───────────────
   useEffect(() => {
-    if (!request?.location) return;
+    if (typeof request?.location !== 'string' || !request.location.trim()) return;
     const loc = request.location.trim();
     if (isCoordString(loc)) {
       const coords = parseCoordString(loc);
@@ -825,7 +840,7 @@ export default function RequestDetail() {
     const startMs = normalised ? (new Date(normalised).getTime() || Date.now()) : Date.now();
 
     // Use an object ref so tick() can clear itself without stale closure issues
-    const timerRef = { id: 0 as ReturnType<typeof setInterval> };
+    const timerRef = { id: 0 };
 
     const tick = () => {
       const elapsed = Date.now() - startMs;
@@ -844,9 +859,9 @@ export default function RequestDetail() {
     tick();
     // Only start the interval if window hasn't already expired
     if (Date.now() - startMs < WINDOW_MS) {
-      timerRef.id = setInterval(tick, 1000);
+      timerRef.id = window.setInterval(tick, 1000);
     }
-    return () => clearInterval(timerRef.id);
+    return () => window.clearInterval(timerRef.id);
   }, [request?.status, (request as any)?.dispatched_at, request?.created_at]);
 
   // ── Notify driver when mechanic accepts ──────────────────────────────────
@@ -1315,12 +1330,13 @@ export default function RequestDetail() {
         })()}
 
         {/* Tracking map — shows while heading to you; auto-closes once service starts */}
-        {(mapCoords != null || gpsLat != null || request.mechanic_lat != null) &&
-         ['pending', 'accepted', 'en_route', 'arrived'].includes(request.status) && (
+        {['pending', 'accepted', 'en_route', 'arrived'].includes(request.status) && (
           <div className="animate-slide-up">
             <TrackingMap
               driverLat={mapCoords?.lat ?? gpsLat}
               driverLng={mapCoords?.lon ?? gpsLng}
+              mechanicLat={request.mechanic_lat}
+              mechanicLng={request.mechanic_lon}
               arrived={request.status === 'arrived'}
               assigned={['accepted', 'en_route'].includes(request.status)}
               simActive={request.status === 'en_route'}
@@ -2060,7 +2076,7 @@ export default function RequestDetail() {
               No mechanics available
             </h2>
             <p style={{ color: 'var(--text-lo)', fontSize: 13, textAlign: 'center', lineHeight: 1.65, marginBottom: 28 }}>
-              No service providers accepted your request in time. You can try again or cancel the request.
+              We couldn&apos;t find an available service provider for this request right now. You can try again or cancel the request.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <button
@@ -2069,7 +2085,7 @@ export default function RequestDetail() {
                 style={{ width: '100%', height: 54, borderRadius: 16, border: 'none', background: isTryingAgain ? 'rgba(245,158,11,0.5)' : 'linear-gradient(135deg, #F59E0B, #D97706)', color: '#000', fontWeight: 800, fontSize: 15, cursor: isTryingAgain ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
               >
                 {isTryingAgain && <Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} />}
-                {isTryingAgain ? 'Cancelling…' : 'Try Again'}
+                {isTryingAgain ? 'Searching…' : 'Try Again'}
               </button>
               <button
                 onClick={() => { setNoProviders(false); setCancelPhase('warning'); }}

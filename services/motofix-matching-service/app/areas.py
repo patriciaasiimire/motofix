@@ -148,11 +148,34 @@ AREA_INDEX = {area["id"]: area for area in AREA_CATALOG}
 AREA_NAMES = {area["id"]: area["name"] for area in AREA_CATALOG}
 AREA_IDS = {area["id"] for area in AREA_CATALOG}
 
+# Verification-service launch area IDs mapped to the matching service's broader
+# launch regions. These are service-area memberships, not mechanic GPS coordinates.
+SERVICE_AREA_MATCH_AREAS = {
+    15: ("ntinda",),
+    19: ("nakawa",),
+    11: ("nakawa",),
+    16: ("ntinda",),
+    20: ("ntinda",),
+    22: ("nakawa", "kampala_central"),
+    54: ("kawempe",),
+    38: ("kawempe",),
+    57: ("bwaise",),
+    56: ("bwaise",),
+    52: ("bwaise",),
+    75: ("makerere", "wandegeya"),
+    80: ("wandegeya",),
+    60: ("makerere",),
+    44: ("makerere",),
+    61: ("mengo",),
+    47: ("mengo", "kampala_central"),
+    51: ("bwaise", "kawempe"),
+}
 
-def normalize_service_area_ids(value: Optional[Iterable[str] | str]) -> List[str]:
+
+def normalize_service_area_ids(value: Any) -> List[str]:
     if value is None:
         return []
-    if isinstance(value, str):
+    if isinstance(value, (str, int)):
         raw_values = [value]
     else:
         raw_values = list(value)
@@ -161,8 +184,14 @@ def normalize_service_area_ids(value: Optional[Iterable[str] | str]) -> List[str
     for raw in raw_values:
         if raw is None:
             continue
+        if isinstance(raw, int):
+            ids.extend(SERVICE_AREA_MATCH_AREAS.get(raw, ()))
+            continue
         parts = str(raw).strip().replace(" ", "_")
         if not parts:
+            continue
+        if parts.isdigit():
+            ids.extend(SERVICE_AREA_MATCH_AREAS.get(int(parts), ()))
             continue
         cleaned = parts.lower()
         if cleaned in AREA_IDS:

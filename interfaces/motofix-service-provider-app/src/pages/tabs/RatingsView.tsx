@@ -11,6 +11,7 @@ import { reviewService, jobService, diagnosisService } from '@/config/api'
 import type { ChatMsg } from '@/config/api'
 import type { ServiceRequest } from '@/types'
 import { useTheme } from '@/contexts/ThemeContext'
+import { MOTOBOT_ENABLED } from '@/config/features'
 
 const AMBER = '#F59E0B'
 
@@ -203,6 +204,7 @@ function RatingDetail({ review, job, cardBorder, onBack }: { review: Review; job
 
   // Auto-generate the AI summary once on open.
   useEffect(() => {
+    if (!MOTOBOT_ENABLED) return
     let alive = true
     diagnosisService.chat([{ role: 'user', content: `${context}\n\nIn 3–4 short sentences, summarise how this job went for me (the mechanic) and give one practical takeaway. Be concise and specific.` }], 'mechanic')
       .then(res => { if (alive) setSummary(res.data.reply || 'No summary available.') })
@@ -301,6 +303,7 @@ function RatingDetail({ review, job, cardBorder, onBack }: { review: Review; job
           )}
         </div>
 
+        {MOTOBOT_ENABLED && <>
         {/* AI summary */}
         <div style={{ padding: '14px 16px', borderRadius: 16, background: `${AMBER}0c`, border: `1px solid ${AMBER}33` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
@@ -347,10 +350,11 @@ function RatingDetail({ review, job, cardBorder, onBack }: { review: Review; job
           </div>
         )}
         <div ref={endRef} />
+        </>}
       </div>
 
       {/* Input */}
-      <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border-2)', flexShrink: 0, paddingBottom: 'max(10px, env(safe-area-inset-bottom, 10px))', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+      {MOTOBOT_ENABLED && <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border-2)', flexShrink: 0, paddingBottom: 'max(10px, env(safe-area-inset-bottom, 10px))', display: 'flex', gap: 8, alignItems: 'flex-end' }}>
         <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && ask(input)}
           placeholder="Ask about this job…" disabled={sending}
           style={{ flex: 1, background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 14, padding: '11px 14px', outline: 'none', color: 'var(--text-hi)', fontSize: 14, opacity: sending ? 0.6 : 1 }} />
@@ -358,7 +362,7 @@ function RatingDetail({ review, job, cardBorder, onBack }: { review: Review; job
           style={{ width: 44, height: 44, borderRadius: 14, border: 'none', flexShrink: 0, background: input.trim() && !sending ? `linear-gradient(135deg, ${AMBER}, #D97706)` : 'var(--surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: input.trim() && !sending ? 'pointer' : 'default' }}>
           {sending ? <Loader2 style={{ width: 16, height: 16, color: 'var(--text-dim)', animation: 'spin 0.8s linear infinite' }} /> : <Send style={{ width: 16, height: 16, color: input.trim() ? '#000' : 'var(--text-ghost)' }} />}
         </button>
-      </div>
+      </div>}
     </div>
   )
 }

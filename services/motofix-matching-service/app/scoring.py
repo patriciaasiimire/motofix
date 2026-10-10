@@ -271,8 +271,8 @@ def score_mechanic(
         "mechanic_id": mechanic["id"],
         "is_preferred": mechanic["id"] == preferred_mechanic_id,
         "mechanic_name": (
-            mechanic.get("full_name")
-            or mechanic.get("name")
+            mechanic.get("name")
+            or mechanic.get("full_name")
             or f"Mechanic {mechanic['id']}"
         ),
         "phone": mechanic.get("phone"),
@@ -376,7 +376,7 @@ def rank_launch_fallback(
         candidates.append({
             "mechanic_id": mechanic_id,
             "is_preferred": mechanic_id == preferred_mechanic_id,
-            "mechanic_name": mechanic.get("full_name") or mechanic.get("name") or f"Mechanic {mechanic_id}",
+            "mechanic_name": mechanic.get("name") or mechanic.get("full_name") or f"Mechanic {mechanic_id}",
             "phone": mechanic.get("phone"),
             "fcm_token": mechanic.get("fcm_token"),
             "distance_km": round(distance, 2),

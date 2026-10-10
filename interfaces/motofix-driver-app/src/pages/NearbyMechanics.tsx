@@ -4,7 +4,8 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { GoogleMap, useLoadScript, Marker, Circle, Polyline, DirectionsRenderer } from '@react-google-maps/api';
+import L, { type Map as LeafletMap } from 'leaflet';
+import { MapContainer, TileLayer, Marker, Circle, Polyline, Popup, useMap } from 'react-leaflet';
 import {
   ArrowLeft, Phone, Star, Navigation, X,
   Shield, Clock, Zap, MapPin, CheckCircle2,
@@ -20,47 +21,45 @@ const R  = '#ff2d2d';
 const Y  = '#F59E0B';
 const YD = '#D97706';
 
-/* ── Light map styles ─────────────────────────────────────────────────────── */
-const DARK_MAP: google.maps.MapTypeStyle[] = [
-  { elementType: 'geometry',                    stylers: [{ color: '#f8f9fa' }] },
-  { elementType: 'labels.icon',                 stylers: [{ visibility: 'off' }] },
-  { elementType: 'labels.text.fill',            stylers: [{ color: '#4a5568' }] },
-  { elementType: 'labels.text.stroke',          stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road',       elementType: 'geometry',            stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road',       elementType: 'geometry.stroke',     stylers: [{ color: '#e2e8f0' }] },
-  { featureType: 'road.highway', elementType: 'geometry',          stylers: [{ color: '#fef3c7' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill',  stylers: [{ color: '#92400e' }] },
-  { featureType: 'water',      elementType: 'geometry',            stylers: [{ color: '#bfdbfe' }] },
-  { featureType: 'poi',        elementType: 'geometry',            stylers: [{ color: '#f0fdf4' }] },
-  { featureType: 'transit',    elementType: 'geometry',            stylers: [{ color: '#f1f5f9' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#cbd5e1' }] },
-  { featureType: 'poi.park',   elementType: 'geometry',            stylers: [{ color: '#dcfce7' }] },
-];
-
 /* ── SVG marker icons ─────────────────────────────────────────────────────── */
-const driverIcon = (size = 40) => ({
-  url: `data:image/svg+xml,${encodeURIComponent(
+const driverIcon = (size = 40) => L.divIcon({
+  className: '',
+  html:
     `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
       <circle cx="${size/2}" cy="${size/2}" r="${size/2-2}" fill="${R}" opacity="0.18"/>
       <circle cx="${size/2}" cy="${size/2}" r="${size/3}" fill="${R}" stroke="white" stroke-width="3.5"/>
       <circle cx="${size/2}" cy="${size/2}" r="${size/7.5}" fill="white"/>
-    </svg>`
-  )}`,
-  scaledSize: { width: size, height: size } as google.maps.Size,
-  anchor: { x: size / 2, y: size / 2 } as google.maps.Point,
+    </svg>`,
+  iconSize: [size, size],
+  iconAnchor: [size / 2, size / 2],
 });
 
-const providerIcon = (size = 28, color = Y, pulse = false) => ({
-  url: `data:image/svg+xml,${encodeURIComponent(
+const providerIcon = (size = 28, color = Y, pulse = false) => L.divIcon({
+  className: '',
+  html:
     `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
       ${pulse ? `<circle cx="${size/2}" cy="${size/2}" r="${size/2-1}" fill="${color}" opacity="0.22"/>` : ''}
       <circle cx="${size/2}" cy="${size/2}" r="${size/2.8}" fill="${color}" stroke="white" stroke-width="3"/>
       <circle cx="${size/2}" cy="${size/2}" r="${size/7}" fill="white"/>
-    </svg>`
-  )}`,
-  scaledSize: { width: size, height: size } as google.maps.Size,
-  anchor: { x: size / 2, y: size / 2 } as google.maps.Point,
+    </svg>`,
+  iconSize: [size, size],
+  iconAnchor: [size / 2, size / 2],
 });
+
+function MapController({ mapRef, zoom }: { mapRef: React.MutableRefObject<LeafletMap | null>; zoom: number }) {
+  const map = useMap();
+
+  useEffect(() => {
+    mapRef.current = map;
+    return () => { mapRef.current = null; };
+  }, [map, mapRef]);
+
+  useEffect(() => {
+    if (map.getZoom() !== zoom) map.setZoom(zoom);
+  }, [map, zoom]);
+
+  return null;
+}
 
 /* ── Provider meta ────────────────────────────────────────────────────────── */
 const PROVIDER_META: Record<string, { icon: React.ElementType; color: string; label: string; searchLabel: string }> = {
@@ -204,7 +203,7 @@ function LocationRefineSheet({
               Confirm your exact location
             </p>
             <p style={{ color: 'var(--text-lo)', fontSize: 12, lineHeight: 1.5 }}>
-              Help us pinpoint where you are so we can find the closest {meta.searchLabel.toLowerCase()}.
+              Drag the map pin to refine your GPS position, then add nearby landmarks if helpful.
             </p>
           </div>
         </div>
@@ -508,7 +507,7 @@ function ProviderSheet({ mechanic, serviceType, requesting, onClose, onRequest, 
   const rating  = Math.min(5, Math.max(3.5, _ts > 5 ? _ts / 20 : _ts * 5));  // total_score is 0–100 now (legacy mocks were 0–1)
   const reviews = [REVIEW_POOL[mechanic.mechanic_id % 8], REVIEW_POOL[(mechanic.mechanic_id + 3) % 8]];
   const waPhone = cleanPhone(mechanic.phone);
-  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mechanic.locationLabel)}`;
+  const mapsUrl = `https://www.openstreetmap.org/search?query=${encodeURIComponent(mechanic.locationLabel)}`;
 
   return (
     <div style={{ position: 'absolute', inset: 0, zIndex: 50, pointerEvents: 'none' }}>
@@ -783,21 +782,14 @@ export default function NearbyMechanics() {
   const [mapZoom,      setMapZoom]      = useState(16);
   const [listMinimized,   setListMinimized]   = useState(false);
   const [navigatingTo,    setNavigatingTo]    = useState<RichProvider | null>(null);
-  const [directionsResult, setDirectionsResult] = useState<google.maps.DirectionsResult | null>(null);
   const [navInfo,         setNavInfo]         = useState<{ distance: string; duration: string } | null>(null);
-  const [navLoading,      setNavLoading]      = useState(false);
+  const [refinementNote, setRefinementNote] = useState('');
 
-  const mapRef      = useRef<google.maps.Map | null>(null);
+  const mapRef      = useRef<LeafletMap | null>(null);
   const provInitPos = useRef({ lat: 0, lng: 0 });
   // Store the latest driverPos in a ref so startSearch always uses current coords
   const driverPosRef = useRef(driverPos);
   useEffect(() => { driverPosRef.current = driverPos; }, [driverPos]);
-
-  const { isLoaded, loadError } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '',
-  });
-  const noKey = !import.meta.env.VITE_GOOGLE_MAPS_API_KEY || import.meta.env.VITE_GOOGLE_MAPS_API_KEY === 'YOUR_GOOGLE_MAPS_API_KEY_HERE';
-  const mapOk = isLoaded && !loadError && !noKey;
 
   const meta = PROVIDER_META[serviceType] ?? PROVIDER_META.mechanic;
 
@@ -829,16 +821,6 @@ export default function NearbyMechanics() {
   const refinedRef = useRef(false);
   const markRefined = () => { refinedRef.current = true; };
 
-  /* ── Haversine distance in km ── */
-  function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
-    const R = 6371;
-    const dLat = (b.lat - a.lat) * Math.PI / 180;
-    const dLng = (b.lng - a.lng) * Math.PI / 180;
-    const x = Math.sin(dLat / 2) ** 2 +
-      Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
-    return R * 2 * Math.asin(Math.sqrt(x));
-  }
-
   /* ── Step 1: beacon → refine (only first time) ── */
   useEffect(() => {
     (async () => {
@@ -855,44 +837,10 @@ export default function NearbyMechanics() {
   }, []);
 
   /* ── Step 2: after refine form submit ── */
-  const handleRefineSubmit = async (note: string, photo: File | null) => {
+  const handleRefineSubmit = async (note: string, _photo: File | null) => {
     markRefined();
+    setRefinementNote(note.trim());
     setPhase('refining');
-
-    if (note.trim() && mapOk) {
-      try {
-        const geocoder = new google.maps.Geocoder();
-        const res = await geocoder.geocode({
-          address: `${note}, Uganda`,
-          location: driverPosRef.current,
-          bounds: new google.maps.LatLngBounds(
-            { lat: driverPosRef.current.lat - 0.08, lng: driverPosRef.current.lng - 0.08 },
-            { lat: driverPosRef.current.lat + 0.08, lng: driverPosRef.current.lng + 0.08 },
-          ),
-        });
-
-        if (res.results[0]) {
-          const loc  = res.results[0].geometry.location;
-          const newPos = { lat: loc.lat(), lng: loc.lng() };
-          const dist = haversineKm(driverPosRef.current, newPos);
-
-          if (dist > 0.15) {
-            // Described location differs — move pin
-            setDriverPos(newPos);
-            if (mapRef.current) mapRef.current.panTo(newPos);
-
-            if (dist > 2) {
-              toast.info(
-                `Location adjusted — your description placed you ${dist.toFixed(1)} km from your GPS. Recalculating search area.`,
-                { duration: 5000 }
-              );
-            }
-          }
-        }
-      } catch {
-        // Geocoding unavailable — continue with GPS coordinates
-      }
-    }
 
     await new Promise(r => setTimeout(r, 900));
     startSearch();
@@ -945,10 +893,9 @@ export default function NearbyMechanics() {
     // Fit bounds
     setTimeout(() => {
       if (mapRef.current) {
-        const bounds = new google.maps.LatLngBounds();
-        bounds.extend(center);
-        list.forEach(m => bounds.extend(m.pos));
-        mapRef.current.fitBounds(bounds, { top: 80, bottom: 320, left: 40, right: 40 });
+        const bounds = L.latLngBounds([center.lat, center.lng], [center.lat, center.lng]);
+        list.forEach(m => bounds.extend([m.pos.lat, m.pos.lng]));
+        mapRef.current.fitBounds(bounds, { paddingTopLeft: [40, 80], paddingBottomRight: [40, 320] });
       }
     }, list.length * 380 + 300);
   }, [serviceType]);
@@ -967,7 +914,7 @@ export default function NearbyMechanics() {
       const pos = { lat: start.lat + (dp.lat - start.lat) * progress, lng: start.lng + (dp.lng - start.lng) * progress };
       setProviderPos(pos);
       setEtaMinutes(Math.max(1, Math.round(totalEta * (1 - progress))));
-      if (mapRef.current) mapRef.current.panTo({ lat: (pos.lat + dp.lat) / 2, lng: (pos.lng + dp.lng) / 2 });
+      if (mapRef.current) mapRef.current.panTo([(pos.lat + dp.lat) / 2, (pos.lng + dp.lng) / 2]);
       if (step >= total) clearInterval(t);
     }, 4000);
     return () => clearInterval(t);
@@ -978,7 +925,11 @@ export default function NearbyMechanics() {
     if (!selected) return;
     setRequesting(true);
     try {
-      await requestsService.create({ customer_name: user?.full_name ?? 'Driver', service_type: serviceType, location: address, description: 'Roadside assistance needed' });
+      const locationWithCoordinates = `${address} (${driverPosRef.current.lat.toFixed(6)}, ${driverPosRef.current.lng.toFixed(6)})`;
+      const description = refinementNote
+        ? `Roadside assistance needed. Location details: ${refinementNote}`
+        : 'Roadside assistance needed';
+      await requestsService.create({ customer_name: user?.full_name ?? 'Driver', service_type: serviceType, location: locationWithCoordinates, description });
       const sel = selected;
       setSelected(null);
       setAccepted(sel);
@@ -993,55 +944,27 @@ export default function NearbyMechanics() {
   };
 
   /* ── In-app navigation ── */
-  const startNavigation = useCallback(async (m: RichProvider) => {
+  const startNavigation = useCallback((m: RichProvider) => {
     setNavigatingTo(m);
     setSelected(null);
-    setNavLoading(true);
-    setDirectionsResult(null);
 
-    // Always set estimated info immediately so nav bar shows something
+    // Use the existing estimate; the route preview is a straight line.
     setNavInfo({
       distance: `~${m.distance_km.toFixed(1)} km`,
       duration: `~${Math.ceil(m.distance_km * 3)} min`,
     });
 
-    // Fit map to show driver + provider while loading
     if (mapRef.current) {
-      const bounds = new google.maps.LatLngBounds();
-      bounds.extend(driverPos);
-      bounds.extend(m.pos);
-      mapRef.current.fitBounds(bounds, { top: 100, bottom: 220, left: 60, right: 60 });
+      mapRef.current.fitBounds(
+        [[driverPos.lat, driverPos.lng], [m.pos.lat, m.pos.lng]],
+        { paddingTopLeft: [60, 100], paddingBottomRight: [60, 220] },
+      );
     }
-
-    if (!mapOk) { setNavLoading(false); return; }
-
-    try {
-      const svc = new google.maps.DirectionsService();
-      const result = await svc.route({
-        origin: driverPos,
-        destination: m.pos,
-        travelMode: google.maps.TravelMode.DRIVING,
-      });
-      setDirectionsResult(result);
-      const leg = result.routes[0]?.legs[0];
-      if (leg) setNavInfo({ distance: leg.distance?.text ?? '', duration: leg.duration?.text ?? '' });
-      if (mapRef.current && result.routes[0]?.bounds) {
-        mapRef.current.fitBounds(result.routes[0].bounds, { top: 100, bottom: 220, left: 60, right: 60 });
-      }
-    } catch (err: any) {
-      const msg = err?.message ?? String(err);
-      console.error('Directions API error:', msg, err);
-      toast.error(`Directions failed: ${msg}`, { duration: 8000 });
-    } finally {
-      setNavLoading(false);
-    }
-  }, [driverPos, mapOk]);
+  }, [driverPos]);
 
   const stopNavigation = () => {
     setNavigatingTo(null);
-    setDirectionsResult(null);
     setNavInfo(null);
-    setNavLoading(false);
     setListMinimized(false);
   };
 
@@ -1049,84 +972,78 @@ export default function NearbyMechanics() {
     <div style={{ position: 'fixed', inset: 0, zIndex: 40, background: '#0a0c14' }}>
 
       {/* ══ MAP ══ */}
-      {mapOk ? (
-        <GoogleMap
-          mapContainerStyle={{ width: '100%', height: '100%' }}
-          center={driverPos}
-          zoom={mapZoom}
-          onLoad={map => { mapRef.current = map; }}
-          options={{ disableDefaultUI: true, gestureHandling: 'greedy', styles: DARK_MAP, clickableIcons: false }}
+      <MapContainer
+        center={[driverPos.lat, driverPos.lng]}
+        zoom={mapZoom}
+        zoomControl={false}
+        style={{ width: '100%', height: '100%' }}
+      >
+        <MapController mapRef={mapRef} zoom={mapZoom} />
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
+        {/* Beacon pulse — always visible */}
+        <Circle center={[driverPos.lat, driverPos.lng]} radius={beaconOuter} pathOptions={{ color: R, opacity: 0.22, weight: 1.5, fillColor: R, fillOpacity: 0.05 }} interactive={false} />
+        <Circle center={[driverPos.lat, driverPos.lng]} radius={beaconMid} pathOptions={{ color: R, opacity: 0.5, weight: 1.5, fillColor: R, fillOpacity: 0.11 }} interactive={false} />
+
+        {/* Results boundary */}
+        {phase === 'results' && (
+          <Circle center={[driverPos.lat, driverPos.lng]} radius={2000} pathOptions={{ color: Y, opacity: 0.15, weight: 1, fillColor: Y, fillOpacity: 0.02 }} interactive={false} />
+        )}
+
+        {/* Driver pin */}
+        <Marker
+          position={[driverPos.lat, driverPos.lng]}
+          icon={driverIcon(40)}
+          zIndexOffset={20}
+          draggable={phase === 'refine'}
+          eventHandlers={{
+            dragend: event => {
+              const position = event.target.getLatLng();
+              setDriverPos({ lat: position.lat, lng: position.lng });
+            },
+          }}
         >
-          {/* Beacon pulse — always visible */}
-          <Circle center={driverPos} radius={beaconOuter} options={{ strokeColor: R, strokeOpacity: 0.22, strokeWeight: 1.5, fillColor: R, fillOpacity: 0.05, clickable: false }} />
-          <Circle center={driverPos} radius={beaconMid}   options={{ strokeColor: R, strokeOpacity: 0.5,  strokeWeight: 1.5, fillColor: R, fillOpacity: 0.11, clickable: false }} />
+          {phase === 'refine' && <Popup>Drag this pin to refine your GPS location.</Popup>}
+        </Marker>
 
-          {/* Results boundary */}
-          {phase === 'results' && (
-            <Circle center={driverPos} radius={2000} options={{ strokeColor: Y, strokeOpacity: 0.15, strokeWeight: 1, fillColor: Y, fillOpacity: 0.02, clickable: false }} />
-          )}
+        {/* Provider markers — stagger in */}
+        {phase === 'results' && mechanics.filter(m => visibleIds.has(m.mechanic_id)).map(m => (
+          <Marker
+            key={m.mechanic_id}
+            position={[m.pos.lat, m.pos.lng]}
+            icon={providerIcon(selected?.mechanic_id === m.mechanic_id ? 34 : 28, meta.color, selected?.mechanic_id === m.mechanic_id)}
+            eventHandlers={{ click: () => { setSelected(m); mapRef.current?.panTo([m.pos.lat, m.pos.lng]); } }}
+            zIndexOffset={selected?.mechanic_id === m.mechanic_id ? 15 : 8}
+          >
+            <Popup>{m.mechanic_name} · {m.distance_km.toFixed(1)} km away</Popup>
+          </Marker>
+        ))}
 
-          {/* Driver pin */}
-          <Marker position={driverPos} icon={driverIcon(40)} zIndex={20} />
-
-          {/* Provider markers — stagger in */}
-          {phase === 'results' && mechanics.filter(m => visibleIds.has(m.mechanic_id)).map(m => (
-            <Marker
-              key={m.mechanic_id}
-              position={m.pos}
-              icon={providerIcon(selected?.mechanic_id === m.mechanic_id ? 34 : 28, meta.color, selected?.mechanic_id === m.mechanic_id)}
-              onClick={() => { setSelected(m); mapRef.current?.panTo(m.pos); }}
-              zIndex={selected?.mechanic_id === m.mechanic_id ? 15 : 8}
+        {/* Straight-line navigation preview */}
+        {navigatingTo && (
+          <>
+            <Polyline
+              positions={[[driverPos.lat, driverPos.lng], [navigatingTo.pos.lat, navigatingTo.pos.lng]]}
+              pathOptions={{ color: '#34D399', weight: 4, opacity: 0.75, dashArray: '8 10' }}
             />
-          ))}
+            <Marker position={[navigatingTo.pos.lat, navigatingTo.pos.lng]} icon={providerIcon(34, '#34D399', true)} zIndexOffset={20} />
+          </>
+        )}
 
-          {/* In-app route — real directions */}
-          {directionsResult && (
-            <DirectionsRenderer
-              directions={directionsResult}
-              options={{
-                suppressMarkers: true,
-                polylineOptions: { strokeColor: '#34D399', strokeWeight: 5, strokeOpacity: 0.9 },
-              }}
+        {/* Tracking */}
+        {(phase === 'tracking' || phase === 'connecting') && accepted && (
+          <>
+            <Marker position={[providerPos.lat, providerPos.lng]} icon={providerIcon(32, meta.color, true)} zIndexOffset={15} />
+            <Polyline
+              positions={[[providerPos.lat, providerPos.lng], [driverPos.lat, driverPos.lng]]}
+              pathOptions={{ color: Y, opacity: 0.8, weight: 3, dashArray: '6 8' }}
             />
-          )}
-
-          {/* Fallback straight-line route while directions load or if API unavailable */}
-          {navigatingTo && !directionsResult && (
-            <>
-              <Polyline
-                path={[driverPos, navigatingTo.pos]}
-                options={{
-                  strokeColor: '#34D399',
-                  strokeWeight: 4,
-                  strokeOpacity: 0.7,
-                  icons: [{
-                    icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 4 },
-                    offset: '0',
-                    repeat: '20px',
-                  }],
-                }}
-              />
-              <Marker position={navigatingTo.pos} icon={providerIcon(34, '#34D399', true)} zIndex={20} />
-            </>
-          )}
-
-          {/* Tracking */}
-          {(phase === 'tracking' || phase === 'connecting') && accepted && (
-            <>
-              <Marker position={providerPos} icon={providerIcon(32, meta.color, true)} zIndex={15} />
-              <Polyline path={[providerPos, driverPos]} options={{ strokeColor: Y, strokeOpacity: 0.8, strokeWeight: 3, icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 }, offset: '0', repeat: '18px' }] }} />
-            </>
-          )}
-        </GoogleMap>
-      ) : (
-        <div style={{ width: '100%', height: '100%', background: 'var(--page-bg)', backgroundImage: `linear-gradient(${Y}05 1px,transparent 1px),linear-gradient(90deg,${Y}05 1px,transparent 1px)`, backgroundSize: '38px 38px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ padding: '14px 20px', borderRadius: 14, textAlign: 'center', background: `${Y}12`, border: `1px solid ${Y}30`, maxWidth: 280 }}>
-            <p style={{ color: Y, fontWeight: 800, fontSize: 13, marginBottom: 4 }}>Add Google Maps API Key</p>
-            <p style={{ color: 'var(--text-dim)', fontSize: 11, lineHeight: 1.5 }}>Set <code style={{ color: Y }}>VITE_GOOGLE_MAPS_API_KEY</code> in <code style={{ color: Y }}>.env.local</code></p>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </MapContainer>
 
       {/* ══ SCAN BLUR — sits above map ══ */}
       {phase === 'scanning' && <ScanBlurOverlay searchLabel={meta.searchLabel} />}
@@ -1343,19 +1260,17 @@ export default function NearbyMechanics() {
           {/* Distance + duration */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
             <div style={{ padding: '10px 14px', borderRadius: 12, background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.2)', textAlign: 'center' }}>
-              {navLoading ? <Loader2 style={{ width: 18, height: 18, color: '#60A5FA', margin: '0 auto' }} className="animate-spin" /> : <p style={{ color: '#60A5FA', fontWeight: 900, fontSize: 18, lineHeight: 1 }}>{navInfo?.distance}</p>}
+              <p style={{ color: '#60A5FA', fontWeight: 900, fontSize: 18, lineHeight: 1 }}>{navInfo?.distance}</p>
               <p style={{ color: 'var(--text-dim)', fontSize: 10, marginTop: 3 }}>Distance</p>
             </div>
             <div style={{ padding: '10px 14px', borderRadius: 12, background: `${Y}0d`, border: `1px solid ${Y}25`, textAlign: 'center' }}>
-              {navLoading ? <Loader2 style={{ width: 18, height: 18, color: Y, margin: '0 auto' }} className="animate-spin" /> : <p style={{ color: Y, fontWeight: 900, fontSize: 18, lineHeight: 1 }}>{navInfo?.duration}</p>}
+              <p style={{ color: Y, fontWeight: 900, fontSize: 18, lineHeight: 1 }}>{navInfo?.duration}</p>
               <p style={{ color: 'var(--text-dim)', fontSize: 10, marginTop: 3 }}>Drive Time</p>
             </div>
           </div>
-          {!navLoading && !directionsResult && (
-            <p style={{ color: 'var(--text-faint)', fontSize: 10.5, textAlign: 'center', marginBottom: 10 }}>
-              Straight-line estimate · Enable Directions API for road route
-            </p>
-          )}
+          <p style={{ color: 'var(--text-faint)', fontSize: 10.5, textAlign: 'center', marginBottom: 10 }}>
+            Straight-line estimate · travel time is approximate
+          </p>
 
           {/* View profile button */}
           <button

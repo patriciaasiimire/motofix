@@ -12,6 +12,7 @@ import {
   Plus, History, Trash2, MessageSquare,
 } from 'lucide-react'
 import { diagnosisService } from '@/config/api'
+import { MOTOBOT_ENABLED } from '@/config/features'
 import type { ChatMsg } from '@/config/api'
 import { useTheme } from '@/contexts/ThemeContext'
 
@@ -210,7 +211,7 @@ export default function MechanicalRepairsView({ onBack }: Props) {
   const inputRef      = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => { if (activeTab === 'motobot') setTimeout(() => inputRef.current?.focus(), 150) }, [activeTab])
+  useEffect(() => { if (MOTOBOT_ENABLED && activeTab === 'motobot') setTimeout(() => inputRef.current?.focus(), 150) }, [activeTab])
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, sending])
 
   /* Persist the active conversation (once it has a real exchange) — newest first, capped at 40. */
@@ -312,7 +313,7 @@ export default function MechanicalRepairsView({ onBack }: Props) {
 
   const TABS: { id: 'guides' | 'motobot' | 'parts'; label: string; Icon: ElementType }[] = [
     { id: 'guides',  label: 'Guides',  Icon: ListChecks },
-    { id: 'motobot', label: 'MOTOBOT', Icon: Bot },
+    ...(MOTOBOT_ENABLED ? [{ id: 'motobot' as const, label: 'MOTOBOT', Icon: Bot }] : []),
     { id: 'parts',   label: 'Parts',   Icon: Package },
   ]
 
@@ -349,7 +350,9 @@ export default function MechanicalRepairsView({ onBack }: Props) {
         </button>
         <div style={{ flex: 1 }}>
           <p style={{ color: 'var(--text-hi)', fontWeight: 900, fontSize: 17, lineHeight: 1 }}>Mechanical Repairs</p>
-          <p style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 2 }}>Guides · MOTOBOT AI · Spare parts</p>
+          <p style={{ color: 'var(--text-dim)', fontSize: 11, marginTop: 2 }}>
+            {MOTOBOT_ENABLED ? 'Guides · MOTOBOT AI · Spare parts' : 'Guides · Spare parts'}
+          </p>
         </div>
         <div style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: `${AMBER}18`, border: `1px solid ${AMBER}40`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Wrench style={{ width: 18, height: 18, color: AMBER }} />
@@ -500,10 +503,10 @@ export default function MechanicalRepairsView({ onBack }: Props) {
                           style={{ marginTop: 14, width: '100%', height: 44, borderRadius: 12, background: YT_RED, color: '#fff', fontWeight: 800, fontSize: 13.5, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, boxShadow: '0 4px 14px rgba(255,0,0,0.28)', boxSizing: 'border-box' }}>
                           <Youtube style={{ width: 19, height: 19 }} /> Watch how-to on YouTube
                         </a>
-                        <button onClick={() => askAboutIssue(issue, selectedSystem)}
+                        {MOTOBOT_ENABLED && <button onClick={() => askAboutIssue(issue, selectedSystem)}
                           style={{ marginTop: 8, width: '100%', height: 40, borderRadius: 12, background: `${selectedSystem.color}15`, border: `1px solid ${selectedSystem.color}38`, color: selectedSystem.color, fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
                           <Bot style={{ width: 15, height: 15 }} /> Ask MOTOBOT about this
-                        </button>
+                        </button>}
                       </div>
                     )}
                   </div>
@@ -514,7 +517,7 @@ export default function MechanicalRepairsView({ onBack }: Props) {
         )}
 
         {/* ── MOTOBOT chat ────────────────────────────────────── */}
-        {activeTab === 'motobot' && (
+        {MOTOBOT_ENABLED && activeTab === 'motobot' && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <input ref={imageInputRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) sendImage(f); e.target.value = '' }} />

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { useTheme } from '@/contexts/ThemeContext'
 import { partsService, diagnosisService, dealerService, type ProviderPartsOrder } from '@/config/api'
+import { MOTOBOT_ENABLED } from '@/config/features'
 import { toast } from 'sonner'
 
 const LIBS: ('places')[] = ['places']
@@ -193,13 +194,15 @@ export default function SpareParts() {
     setSuppliers([])
     setDispatched(null)
 
-    // 1) AI price (per-unit) — fall back to the catalogue range if unavailable.
+    // Use the catalogue price unless the AI pricing feature is explicitly enabled.
     let unit = { min: item.min, max: item.max }
-    try {
-      const res = await diagnosisService.partsPrice([partString()])
-      const p = res.data.items?.[0]
-      if (p && (p.price_min || p.price_max)) unit = { min: p.price_min || item.min, max: p.price_max || item.max }
-    } catch { /* keep catalogue range */ }
+    if (MOTOBOT_ENABLED) {
+      try {
+        const res = await diagnosisService.partsPrice([partString()])
+        const p = res.data.items?.[0]
+        if (p && (p.price_min || p.price_max)) unit = { min: p.price_min || item.min, max: p.price_max || item.max }
+      } catch { /* keep catalogue range */ }
+    }
     setAiPrice(unit)
 
     // 2) Suppliers — the admin-registered dealer directory first (real businesses),
@@ -404,7 +407,7 @@ export default function SpareParts() {
             {cfg.make && (
               <div style={{ animation: 'sp-fade 0.3s ease both', marginBottom: 8 }}>
                 <p style={{ color: textMd, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                  <Sparkles size={13} style={{ color: col }} /> MOTOBOT matched these {cfg.make} models — pick yours
+                  <Sparkles size={13} style={{ color: col }} /> Available {cfg.make} models — pick yours
                 </p>
                 {cfg.make === 'Other' || (makeObj && makeObj.models.length === 0) ? (
                   <input value={cfg.model ?? ''} onChange={e => setCfg(c => ({ ...c, model: e.target.value }))} placeholder="Type your car model"
@@ -446,7 +449,11 @@ export default function SpareParts() {
           </div>
           <div style={{ textAlign: 'center' }}>
             <p style={{ color: textHi, fontWeight: 900, fontSize: 18, marginBottom: 6 }}>Finding suppliers near you…</p>
-            <p style={{ color: textLo, fontSize: 13, lineHeight: 1.6, maxWidth: 280 }}>MOTOBOT is pricing your part and matching it with spare-parts suppliers in your area.</p>
+            <p style={{ color: textLo, fontSize: 13, lineHeight: 1.6, maxWidth: 280 }}>
+              {MOTOBOT_ENABLED
+                ? 'MOTOBOT is pricing your part and matching it with spare-parts suppliers in your area.'
+                : 'Using the catalogue estimate while we find spare-parts suppliers in your area.'}
+            </p>
           </div>
           <Loader2 size={22} style={{ color: PURPLE, animation: 'sp-spin 0.9s linear infinite' }} />
         </div>
@@ -474,7 +481,10 @@ export default function SpareParts() {
                 <p style={{ color: textLo, fontSize: 12, marginBottom: 12 }}>Quantity: {qty}</p>
                 <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', paddingTop: 12, borderTop: '1px dashed var(--border-2)' }}>
                   <div>
-                    <p style={{ color: textLo, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}><Sparkles size={11} style={{ color: PURPLE }} /> MOTOBOT estimate · incl. delivery</p>
+                    <p style={{ color: textLo, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {MOTOBOT_ENABLED && <Sparkles size={11} style={{ color: PURPLE }} />}
+                      {MOTOBOT_ENABLED ? 'MOTOBOT estimate' : 'Catalogue estimate'} · incl. delivery
+                    </p>
                     <p style={{ color: PURPLE, fontWeight: 900, fontSize: 20, marginTop: 3 }}>{fmtUGX(total.min)} – {fmtUGX(total.max)}</p>
                   </div>
                   <span style={{ fontSize: 10.5, color: textLo, display: 'flex', alignItems: 'center', gap: 4 }}><Truck size={12} /> +{fmtUGX(DELIVERY.min)}–{fmtUGX(DELIVERY.max)} transport</span>

@@ -12,8 +12,8 @@ import { serverNow } from '@/utils/serverClock'
 //   • en_route_at     (the moment the journey began)
 //
 // Because the inputs are identical on both sides, the driver app and the
-// mechanic app independently compute the SAME shortest road route, the SAME pin
-// position, and the SAME monotonically-decreasing ETA — no broadcast needed.
+// mechanic app independently compute the SAME straight-line route, pin position,
+// and monotonically-decreasing ETA — no broadcast needed.
 // The whole journey is compressed into SIM_MINUTES so a demo never drags on.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,6 @@ export interface JobSim {
 }
 
 export function useJobSim(opts: {
-  isLoaded: boolean
   active: boolean                 // a mechanic is assigned & heading over (accepted/en_route)
                                   // → BUILD + show the fixed route and both endpoints
   advancing?: boolean             // status === 'en_route' → ADVANCE the pin/ETA along it
@@ -64,7 +63,7 @@ export function useJobSim(opts: {
   seed: string                    // request id
   enRouteAt?: string | null
 }): JobSim {
-  const { isLoaded, active, driver, seed, enRouteAt } = opts
+  const { active, driver, seed, enRouteAt } = opts
   const advancing = opts.advancing ?? active
 
   const metaRef = useRef<RouteMeta | null>(null)
@@ -98,45 +97,16 @@ export function useJobSim(opts: {
     if (clockStartRef.current == null) clockStartRef.current = serverNow()
   }, [advancing, enRouteAt])
 
-  // Fetch the fixed shortest road route ONCE, from the deterministic start to
+  // Build the fixed straight-line route once from the deterministic start to
   // the driver. It does not change as the pin advances.
   useEffect(() => {
-    if (!isLoaded || !active || !driver || reqRef.current) return
+    if (!active || !driver || reqRef.current) return
     reqRef.current = true
     const start = simMechStart(driver, seed)
     startRef.current = start
-    const g = (window as any).google?.maps
-    if (!g) { reqRef.current = false; return }
-
-    const fallback = () => {
-      // Straight-line fallback so the pin still moves if Directions is unavailable.
-      metaRef.current = buildRouteMeta([start, driver])
-      setTick(x => x + 1)
-    }
-    try {
-      // IMPORTANT: request the SINGLE primary route (no alternatives). The driver and
-      // mechanic apps each make their own Directions call, and with alternatives enabled
-      // Google can return a different set/order per call, so the two apps would pick
-      // different routes and the drawn line wouldn't match. The primary route for a fixed
-      // origin→destination is deterministic, so both apps draw the identical road route.
-      new g.DirectionsService().route(
-        { origin: start, destination: driver, travelMode: g.TravelMode.DRIVING, provideRouteAlternatives: false },
-        (result: google.maps.DirectionsResult | null, status: string) => {
-          if (status === 'OK' && result?.routes?.length) {
-            const path: LL[] = (result.routes[0]?.overview_path ?? []).map(
-              (p: google.maps.LatLng) => ({ lat: p.lat(), lng: p.lng() }),
-            )
-            metaRef.current = path.length >= 2 ? buildRouteMeta(path) : buildRouteMeta([start, driver])
-            setTick(x => x + 1)
-          } else {
-            fallback()
-          }
-        },
-      )
-    } catch {
-      fallback()
-    }
-  }, [isLoaded, active, driver, seed])
+    metaRef.current = buildRouteMeta([start, driver])
+    setTick(x => x + 1)
+  }, [active, driver, seed])
 
   // Animation clock — re-render a few times a second while the journey is live.
   useEffect(() => {

@@ -1,10 +1,8 @@
-// BreakdownHotspotMap.tsx — a map highlighting where breakdowns cluster ("hotspots"),
-// so admins can see which areas have the most demand. Built on Google Maps overlays.
+// Highlights areas with the most breakdowns on an OpenStreetMap basemap.
 
 import { useState } from 'react';
-import { GoogleMap, useLoadScript, OverlayView } from '@react-google-maps/api';
+import { CircleMarker, MapContainer, Popup, TileLayer, useMapEvents } from 'react-leaflet';
 import { Flame, MapPin, Activity, X, TrendingUp } from 'lucide-react';
-import { useTheme } from '@/contexts/ThemeContext';
 
 const C = {
   surface:  'var(--adm-surface)',
@@ -18,8 +16,17 @@ const C = {
   orange:   'var(--adm-orange)',
 } as const;
 
-const MAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '';
-const KAMPALA_CENTER = { lat: 0.3136, lng: 32.5811 };
+const KAMPALA_CENTER: [number, number] = [0.3136, 32.5811];
+
+function MapClickHandler({ onMapClick }: { onMapClick: () => void }) {
+  useMapEvents({
+    click: (event) => {
+      event.originalEvent.stopPropagation();
+      onMapClick();
+    },
+  });
+  return null;
+}
 
 interface Hotspot {
   id: number;
@@ -46,54 +53,10 @@ const HOTSPOTS: Hotspot[] = [
   { id: 12, name: 'Namugongo Road',     area: 'Kira',     lat: 0.3600, lng: 32.6600, count: 28, avgDaily: 0.9 },
 ];
 
-const DARK_STYLE = [
-  { elementType: 'geometry',                stylers: [{ color: '#1a1a2e' }] },
-  { elementType: 'labels.text.stroke',      stylers: [{ color: '#1a1a2e' }] },
-  { elementType: 'labels.text.fill',        stylers: [{ color: '#8b8ba4' }] },
-  { featureType: 'road',       elementType: 'geometry',           stylers: [{ color: '#2d2d4a' }] },
-  { featureType: 'road.highway', elementType: 'geometry',         stylers: [{ color: '#3d3d5e' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#d97706' }] },
-  { featureType: 'road',       elementType: 'labels.text.fill',   stylers: [{ color: '#7a7a96' }] },
-  { featureType: 'water',      elementType: 'geometry',           stylers: [{ color: '#0f172a' }] },
-  { featureType: 'water',      elementType: 'labels.text.fill',   stylers: [{ color: '#404040' }] },
-  { featureType: 'poi',        elementType: 'geometry',           stylers: [{ color: '#242440' }] },
-  { featureType: 'poi',        elementType: 'labels.text.fill',   stylers: [{ color: '#5a5a78' }] },
-  { featureType: 'poi.park',   elementType: 'geometry',           stylers: [{ color: '#1a2632' }] },
-  { featureType: 'landscape',  elementType: 'geometry',           stylers: [{ color: '#16213e' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#3a3a5c' }] },
-  { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#FFB300' }] },
-  { featureType: 'transit',    elementType: 'geometry',           stylers: [{ color: '#2f3948' }] },
-];
-
-const LIGHT_STYLE = [
-  { elementType: 'geometry',                stylers: [{ color: '#f5f5f0' }] },
-  { elementType: 'labels.text.stroke',      stylers: [{ color: '#f5f5f0' }] },
-  { elementType: 'labels.text.fill',        stylers: [{ color: '#555555' }] },
-  { featureType: 'road',       elementType: 'geometry',           stylers: [{ color: '#ffffff' }] },
-  { featureType: 'road',       elementType: 'geometry.stroke',    stylers: [{ color: '#d0d0c8' }] },
-  { featureType: 'road.highway', elementType: 'geometry',         stylers: [{ color: '#ffe082' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke',  stylers: [{ color: '#f59e0b' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#7a5c00' }] },
-  { featureType: 'road',       elementType: 'labels.text.fill',   stylers: [{ color: '#666666' }] },
-  { featureType: 'water',      elementType: 'geometry',           stylers: [{ color: '#aad3df' }] },
-  { featureType: 'water',      elementType: 'labels.text.fill',   stylers: [{ color: '#5c8a9f' }] },
-  { featureType: 'poi',        elementType: 'geometry',           stylers: [{ color: '#e8efe0' }] },
-  { featureType: 'poi',        elementType: 'labels.text.fill',   stylers: [{ color: '#777777' }] },
-  { featureType: 'poi.park',   elementType: 'geometry',           stylers: [{ color: '#c8dfc0' }] },
-  { featureType: 'landscape',  elementType: 'geometry',           stylers: [{ color: '#ede9e0' }] },
-  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#c0b090' }] },
-  { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#7a5c00' }] },
-  { featureType: 'transit',    elementType: 'geometry',           stylers: [{ color: '#e0ddd5' }] },
-];
-
 function hotspotColor(count: number) {
   if (count > 60) return '#f87171';
   if (count > 40) return '#FFB300';
   return '#34d399';
-}
-
-function hotspotScale(count: number, max: number) {
-  return 7 + (count / max) * 11;
 }
 
 function RiskBadge({ count }: { count: number }) {
@@ -113,9 +76,7 @@ function RiskBadge({ count }: { count: number }) {
 }
 
 export function BreakdownHotspotMap() {
-  const { isLoaded, loadError } = useLoadScript({ googleMapsApiKey: MAPS_KEY });
   const [selected, setSelected] = useState<Hotspot | null>(null);
-  const { isDark } = useTheme();
 
   const total     = HOTSPOTS.reduce((s, h) => s + h.count, 0);
   const avgDay    = HOTSPOTS.reduce((s, h) => s + h.avgDaily, 0);
@@ -169,96 +130,43 @@ export function BreakdownHotspotMap() {
 
         {/* Map */}
         <div style={{ position: 'relative', flex: 1, minHeight: 380 }}>
-          {loadError ? (
-            <div style={{
-              height: '100%', display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center', gap: 10,
-              color: C.muted, fontSize: 13, background: '#16213e',
-            }}>
-              <MapPin size={28} style={{ opacity: 0.3 }} />
-              Failed to load Google Maps. Check your API key.
-            </div>
-          ) : !isLoaded ? (
-            <div style={{
-              height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: '#16213e',
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-                <div style={{
-                  width: 36, height: 36, borderRadius: '50%',
-                  border: `3px solid rgba(255,179,0,0.15)`,
-                  borderTopColor: C.amber,
-                  animation: 'spin 1s linear infinite',
-                }} />
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-                <span style={{ fontSize: 12, color: C.muted }}>Loading map…</span>
-              </div>
-            </div>
-          ) : (
-            <GoogleMap
-              mapContainerStyle={{ width: '100%', height: '100%' }}
-              center={KAMPALA_CENTER}
-              zoom={12}
-              options={{
-                styles: (isDark ? DARK_STYLE : LIGHT_STYLE) as any,
-                disableDefaultUI: true,
-                zoomControl: true,
-                zoomControlOptions: { position: 3 },
-                gestureHandling: 'cooperative',
-              }}
-              onClick={() => setSelected(null)}
-            >
-              <style>{`
-                @keyframes hotspot-ring {
-                  0%   { transform: translate(-50%,-50%) scale(1); opacity: 0.8; }
-                  100% { transform: translate(-50%,-50%) scale(3.2); opacity: 0; }
-                }
-                .hs-dot { position: absolute; transform: translate(-50%,-50%); cursor: pointer; }
-                .hs-ring {
-                  position: absolute; top: 50%; left: 50%; border-radius: 50%;
-                  background: #ef4444;
-                  animation: hotspot-ring 1.6s ease-out infinite;
-                }
-                .hs-ring2 {
-                  position: absolute; top: 50%; left: 50%; border-radius: 50%;
-                  background: #ef4444;
-                  animation: hotspot-ring 1.6s ease-out 0.6s infinite;
-                }
-                .hs-core {
-                  position: relative; border-radius: 50%; background: #ef4444;
-                  border: 2px solid #fff;
-                  box-shadow: 0 0 6px rgba(239,68,68,0.8);
-                  z-index: 1;
-                }
-                .hs-dot.active .hs-core {
-                  background: #ff2020;
-                  border-color: #fff;
-                  box-shadow: 0 0 12px rgba(239,68,68,1);
-                }
-              `}</style>
-              {HOTSPOTS.map(spot => {
-                const size = spot.count > 60 ? 14 : spot.count > 40 ? 11 : 9;
-                const isActive = selected?.id === spot.id;
-                return (
-                  <OverlayView
-                    key={spot.id}
-                    position={{ lat: spot.lat, lng: spot.lng }}
-                    mapPaneName={OverlayView.OVERLAY_MOUSE_TARGET}
-                  >
-                    <div
-                      className={`hs-dot${isActive ? ' active' : ''}`}
-                      title={`${spot.name} — ${spot.count} incidents`}
-                      onClick={e => { e.stopPropagation(); setSelected(spot); }}
-                    >
-                      <div className="hs-ring" style={{ width: size, height: size }} />
-                      <div className="hs-ring2" style={{ width: size, height: size }} />
-                      <div className="hs-core" style={{ width: size, height: size }} />
-                    </div>
-                  </OverlayView>
-                );
-              })}
-            </GoogleMap>
-          )}
+          <MapContainer
+            className="h-full w-full"
+            center={KAMPALA_CENTER}
+            zoom={12}
+            zoomControl
+            scrollWheelZoom={false}
+            style={{ height: '100%', width: '100%' }}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            <MapClickHandler onMapClick={() => setSelected(null)} />
+            {HOTSPOTS.map(spot => {
+              const isActive = selected?.id === spot.id;
+              const color = hotspotColor(spot.count);
+              return (
+                <CircleMarker
+                  key={spot.id}
+                  center={[spot.lat, spot.lng]}
+                  radius={spot.count > 60 ? 12 : spot.count > 40 ? 10 : 8}
+                  pathOptions={{
+                    color: '#fff',
+                    weight: isActive ? 3 : 2,
+                    fillColor: color,
+                    fillOpacity: 0.9,
+                  }}
+                  eventHandlers={{ click: () => setSelected(spot) }}
+                >
+                  <Popup>
+                    <strong>{spot.name}</strong><br />
+                    {spot.area} · {spot.count} incidents · {spot.avgDaily} avg/day
+                  </Popup>
+                </CircleMarker>
+              );
+            })}
+          </MapContainer>
 
           {/* Selected-spot tooltip overlay */}
           {selected && (

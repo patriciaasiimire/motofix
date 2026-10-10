@@ -459,7 +459,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background pb-28 overflow-x-hidden">
-      <BackLogoutGuard onLogout={() => { logout(); navigate('/welcome'); }} />
+      <BackLogoutGuard onLogout={() => { logout(); navigate('/login'); }} />
       <div className="px-4 max-w-md mx-auto">
 
         {/* ── First-run reminders opt-in ── */}
@@ -893,7 +893,7 @@ export default function Home() {
                   ))}
                   {/* Logout — red tint */}
                   <button
-                    onClick={() => { setDropdownOpen(false); logout(); navigate('/welcome'); }}
+                    onClick={() => { setDropdownOpen(false); logout(); navigate('/login'); }}
                     className="w-full flex items-center gap-3 transition-colors"
                     style={{ padding: '11px 16px', cursor: 'pointer', border: 'none', background: 'transparent', textAlign: 'left' }}
                     onMouseEnter={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}

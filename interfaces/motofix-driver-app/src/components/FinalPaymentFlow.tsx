@@ -186,18 +186,18 @@ export default function FinalPaymentFlow({
               )}
             </div>
 
-            {/* MOTOBOT scan → withdrawal-fee notice */}
+            {/* Withdrawal-fee estimate */}
             {scanning ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 12.5, color: PURPLE, fontWeight: 700, marginBottom: 14 }}>
-                <Loader2 style={{ width: 16, height: 16, animation: 'spin 0.8s linear infinite' }} /> MOTOBOT is scanning the MoMo tariff…
+                <Loader2 style={{ width: 16, height: 16, animation: 'spin 0.8s linear infinite' }} /> Calculating the MoMo withdrawal charge…
               </div>
             ) : fee != null && (
               <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderRadius: 12, background: `${PURPLE}14`, border: `1px solid ${PURPLE}33`, marginBottom: 14 }}>
                 <Sparkles style={{ width: 14, height: 14, color: PURPLE, flexShrink: 0, marginTop: 1 }} />
                 <p style={{ fontSize: 11.5, color: 'var(--text-md)', lineHeight: 1.5 }}>
                   {fee > 0
-                    ? <>MOTOBOT checked the MoMo tariff: cashing out {fmt(amount)} costs {firstName} about <strong>{fmt(fee)}</strong>. We’ve added it so they receive the full amount — you’ll send <strong style={{ color: PURPLE }}>{fmt(total)}</strong>.</>
-                    : <>MOTOBOT checked the MoMo tariff: no withdrawal charge applies at this amount.</>}
+                    ? <>The estimated MoMo withdrawal charge for {fmt(amount)} is <strong>{fmt(fee)}</strong>. We’ve added it so {firstName} receives the full amount — you’ll send <strong style={{ color: PURPLE }}>{fmt(total)}</strong>.</>
+                    : <>No estimated MoMo withdrawal charge applies at this amount.</>}
                 </p>
               </div>
             )}

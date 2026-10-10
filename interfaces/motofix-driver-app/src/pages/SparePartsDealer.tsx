@@ -2,16 +2,18 @@
 // (admin-registered dealers first, then OSM/branded fallbacks), browse self-fix guides,
 // ask MOTOBOT, and open the order flow. Pulls together several parts-related features.
 
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import type { ElementType } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import SelfFixGuides from "@/components/SelfFixGuides";
 import OrderPartsShop from "@/components/OrderPartsShop";
-import { useLoadScript, GoogleMap, Marker, DirectionsRenderer } from "@react-google-maps/api";
+import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
+import { divIcon, type Map as LeafletMap } from "leaflet";
 import { ArrowLeft, Phone, Star, MapPin, X, Navigation, ShoppingBag, Loader2, ChevronRight, MessageCircle, ReceiptText, Clock, Store, Plus, Check, Wrench, Bot, Truck } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useAuth } from "@/hooks/useAuth";
 import { partsService, motobotService, dealerService, PartsOrder, PartPriceItem } from "@/config/api";
+import { MOTOBOT_ENABLED } from "@/config/features";
 import { generateSimDealers, enrichDealer, SimDealer } from "@/lib/simDealers";
 import { toast } from "sonner";
 
@@ -19,77 +21,63 @@ const AMBER = "#F59E0B";
 const AMBER_D = "#D97706";
 const AMBER_GRAD = `linear-gradient(135deg, ${AMBER}, ${AMBER_D})`;
 
-// Teardrop map marker (driver = blue, dealers = amber)
-const mapPin = (color: string) =>
-  `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="50" viewBox="0 0 40 50">' +
-      '<path d="M20 1C10 1 2 9 2 19C2 32 20 49 20 49C20 49 38 32 38 19C38 9 30 1 20 1Z" fill="' +
-      color +
-      '" stroke="white" stroke-width="2.5"/><circle cx="20" cy="18" r="7" fill="white"/></svg>'
-  )}`;
+const driverLeafletIcon = divIcon({
+  className: "",
+  html: '<span style="display:grid;place-items:center;width:32px;height:32px;border:3px solid white;border-radius:50%;background:#3B82F6;color:white;font-size:16px;box-shadow:0 2px 8px #0008">●</span>',
+  iconSize: [32, 32],
+  iconAnchor: [16, 16],
+});
+const dealerLeafletIcon = divIcon({
+  className: "",
+  html: `<span style="display:grid;place-items:center;width:38px;height:38px;border:3px solid white;border-radius:50%;background:#F59E0B;color:white;font-size:20px;box-shadow:0 2px 8px #0008">${"⚙"}</span>`,
+  iconSize: [38, 38],
+  iconAnchor: [19, 19],
+});
 
-// Dealer marker = gear/cog symbol (a shop, not an individual location pin)
-const dealerIcon = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 48 48">' +
-    '<circle cx="24" cy="24" r="22" fill="#ffffff" stroke="#B45309" stroke-width="2"/>' +
-    '<g transform="translate(12,12)">' +
-      '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" fill="#F59E0B"/>' +
-    '</g></svg>'
-)}`;
-
-// ── Landmark lookup (OpenStreetMap) so turn instructions reference real places ──
 type LL = { lat: number; lng: number };
-interface Landmark { name: string; lat: number; lng: number }
 
-function haversineM(a: LL, b: LL): number {
+const KAMPALA: LL = { lat: 0.3476, lng: 32.5825 };
+const LEAFLET_BASE_CSS = `
+  .leaflet-container{position:relative;overflow:hidden;background:#e5e7eb;outline:0;font-family:Arial,sans-serif}
+  .leaflet-pane,.leaflet-tile,.leaflet-marker-icon,.leaflet-marker-shadow,.leaflet-tile-container,.leaflet-pane>svg,.leaflet-pane>canvas{position:absolute;left:0;top:0}
+  .leaflet-pane{z-index:400}.leaflet-tile-pane{z-index:200}.leaflet-overlay-pane{z-index:400}.leaflet-shadow-pane{z-index:500}.leaflet-marker-pane{z-index:600}.leaflet-tooltip-pane{z-index:650}.leaflet-popup-pane{z-index:700}
+  .leaflet-tile{visibility:hidden;max-width:none!important}.leaflet-tile-loaded{visibility:inherit}.leaflet-container img{max-width:none!important;max-height:none!important}
+  .leaflet-control-container{position:absolute;inset:0;pointer-events:none}.leaflet-top,.leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.leaflet-top{top:0}.leaflet-bottom{bottom:0}.leaflet-left{left:0}.leaflet-right{right:0}.leaflet-control{position:relative;pointer-events:auto}
+  .leaflet-control-attribution{background:#ffffffd9;padding:2px 5px;font:11px Arial,sans-serif}.leaflet-popup-content-wrapper{border-radius:10px}.leaflet-popup-content{margin:10px 12px}
+`;
+
+function haversineKm(a: LL, b: LL): number {
   const R = 6371000;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
   const dLng = ((b.lng - a.lng) * Math.PI) / 180;
   const x = Math.sin(dLat / 2) ** 2 + Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return (R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x))) / 1000;
 }
 
-/** Named shops / businesses / stops near the route turns, to make steps specific. */
-async function fetchLandmarks(points: LL[]): Promise<Landmark[]> {
-  if (points.length === 0) return [];
-  const lats = points.map((p) => p.lat), lngs = points.map((p) => p.lng);
-  const pad = 0.0016;
-  const bbox = `${Math.min(...lats) - pad},${Math.min(...lngs) - pad},${Math.max(...lats) + pad},${Math.max(...lngs) + pad}`;
-  const q =
-    "[out:json][timeout:12];(" +
-    `node[name][amenity](${bbox});node[name][shop](${bbox});node[name][office](${bbox});node[name][craft](${bbox});node[name][highway=bus_stop](${bbox});` +
-    ");out tags 320;";
-  const urls = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
-  for (let attempt = 0; attempt < 2; attempt++) {
-    for (const url of urls) {
-      try {
-        const res = await fetch(url, { method: "POST", body: new URLSearchParams({ data: q }) });
-        if (!res.ok) continue;
-        const data = await res.json();
-        const out: Landmark[] = [];
-        for (const el of data.elements ?? []) {
-          const name = el.tags?.name;
-          if (el.lat != null && el.lon != null && name) out.push({ name, lat: el.lat, lng: el.lon });
-        }
-        if (out.length) return out;
-      } catch {
-        /* try the next mirror */
-      }
+function MapViewport({ mapRef, center, points, zoom = 13 }: {
+  mapRef: MutableRefObject<LeafletMap | null>;
+  center: LL;
+  points?: LL[];
+  zoom?: number;
+}) {
+  const map = useMap();
+  const pointsKey = points?.map(({ lat, lng }) => `${lat},${lng}`).join(";") ?? "";
+  useEffect(() => {
+    mapRef.current = map;
+    return () => {
+      if (mapRef.current === map) mapRef.current = null;
+    };
+  }, [map, mapRef]);
+  useEffect(() => {
+    if (points && points.length > 1) {
+      map.fitBounds(points.map(({ lat, lng }) => [lat, lng]), { padding: [36, 36], maxZoom: 16 });
+    } else {
+      map.setView(center, zoom);
     }
-  }
-  return [];
-}
-
-function nearestLandmark(pt: LL, landmarks: Landmark[], maxM = 130): string {
-  let best = "", bestD = maxM;
-  for (const l of landmarks) {
-    const d = haversineM(pt, { lat: l.lat, lng: l.lng });
-    if (d < bestD) {
-      bestD = d;
-      best = l.name;
-    }
-  }
-  return best;
+    // pointsKey tracks coordinate changes without refitting on unrelated renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, pointsKey, center.lat, center.lng, zoom]);
+  return null;
 }
 
 const QUICK_PARTS = ["Tyre", "Inner tube", "Car battery", "Brake pads", "Spark plugs", "Headlight bulb", "Wiper blades", "Engine oil", "Air filter", "Fan belt", "Side mirror", "Shock absorber", "Radiator", "Fuel pump", "Clutch plate", "Fuses"];
@@ -111,7 +99,9 @@ const QUESTIONS: Question[] = [
   { id: "fulfilment", pose: "ready", text: "How would you like to get the parts?", type: "single", options: ["I'll pick them up", "Deliver them to me"] },
 ];
 
-const PROC_MSGS = ["Pricing the parts you need", "Checking current market rates", "Finding the best options near you", "Putting it all together"];
+const PROC_MSGS = MOTOBOT_ENABLED
+  ? ["Pricing the parts you need", "Checking current market rates", "Finding the best options near you", "Putting it all together"]
+  : ["Preparing your parts list", "Using catalogue estimates", "Finding the best options near you", "Putting it all together"];
 const DELIVERY_FEE = 10000; // flat MOTOFIX delivery fee (UGX)
 
 function waDigits(raw?: string): string {
@@ -175,14 +165,11 @@ export default function SparePartsDealer() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { isDark } = useTheme();
-  const { isLoaded: mapLoaded } = useLoadScript({ googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? "" });
-  const mapRef = useRef<google.maps.Map | null>(null);
+  const mapRef = useRef<LeafletMap | null>(null);
   const [routeTo, setRouteTo] = useState<SimDealer | null>(null);
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+  const [directions, setDirections] = useState<LL[] | null>(null);
   const [routeInfo, setRouteInfo] = useState<{ distance: string; duration: string } | null>(null);
-  const [routeLoading, setRouteLoading] = useState(false);
-  const [landmarks, setLandmarks] = useState<Landmark[]>([]);
-  const routeState = useLocation().state as { lat?: number; lng?: number; address?: string; order?: { fault_label?: string; parts: { name: string; price_min: number; price_max: number }[] } } | null;
+  const routeState = useLocation().state as { lat?: number; lng?: number; address?: string; order?: { fault_category?: string; fault_label?: string; parts: { name: string; price_min: number; price_max: number }[] } } | null;
   const firstName = user?.full_name?.trim().split(/\s+/)[0] || "there";
   const preOrder = routeState?.order;
 
@@ -196,6 +183,10 @@ export default function SparePartsDealer() {
   const [priced, setPriced] = useState<PartPriceItem[]>(preOrder?.parts?.length ? preOrder.parts.map((p) => ({ name: p.name, price_min: p.price_min, price_max: p.price_max, note: null })) : []);
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(routeState?.lat != null && routeState?.lng != null ? { lat: routeState.lat, lng: routeState.lng } : null);
   const [dealers, setDealers] = useState<SimDealer[]>([]);
+  const dealerMapPoints = useMemo<LL[]>(
+    () => [...(coords ? [coords] : []), ...dealers.slice(0, 10).map((d) => ({ lat: d.lat, lng: d.lng }))],
+    [coords, dealers],
+  );
   const [selected, setSelected] = useState<SimDealer | null>(null);
   const [heroIdx, setHeroIdx] = useState(0);
   const [ordersOpen, setOrdersOpen] = useState(false);
@@ -251,7 +242,7 @@ export default function SparePartsDealer() {
     };
     (async () => {
       let pr = priced;
-      if (!pr.length && items.length) {
+      if (MOTOBOT_ENABLED && !pr.length && items.length) {
         try {
           const res = await motobotService.priceItems(items);
           pr = res.data.items?.length ? res.data.items : items.map((n) => ({ name: n, price_min: 0, price_max: 0, note: null }));
@@ -317,13 +308,13 @@ export default function SparePartsDealer() {
   const placeOrder = useCallback(() => {
     if (!selected) return;
     const ctx = answers.vehicle || "";
-    const lines = [`Hello ${selected.name}, I'd like to order spare parts via MOTOFIX (MOTOBOT).`, ""];
+    const lines = [`Hello ${selected.name}, I'd like to order spare parts via MOTOFIX.`, ""];
     if (ctx) lines.push(`For: ${ctx}`, "");
     if (priced.length) {
       lines.push("Parts needed:");
       priced.forEach((p) => lines.push(`• ${p.name}${p.price_min || p.price_max ? ` (est. ${range(p.price_min, p.price_max)})` : ""}`));
     }
-    if (coords) lines.push("", `My location: https://maps.google.com/?q=${coords.lat},${coords.lng}`);
+    if (coords) lines.push("", `My location: https://www.openstreetmap.org/?mlat=${coords.lat}&mlon=${coords.lng}#map=16/${coords.lat}/${coords.lng}`);
     lines.push("", "Are these available, and how much in total?");
     const text = encodeURIComponent(lines.join("\n"));
     const digits = waDigits(selected.whatsapp || selected.phone);
@@ -332,7 +323,8 @@ export default function SparePartsDealer() {
       max = priced.reduce((s, p) => s + (p.price_max || 0), 0);
     partsService
       .createOrder({
-        fault_label: ctx ? `Spare parts · ${ctx}` : "Spare parts (MOTOBOT)",
+        fault_category: preOrder?.fault_category ?? undefined,
+        fault_label: ctx ? `Spare parts · ${ctx}` : "Spare parts",
         parts: priced.map((p) => ({ name: p.name, price_min: p.price_min, price_max: p.price_max, qty: 1 })),
         dealer_name: selected.name,
         dealer_phone: selected.phone,
@@ -342,18 +334,18 @@ export default function SparePartsDealer() {
       })
       .then(() => toast.success("Order saved to your history"))
       .catch(() => {});
-  }, [selected, priced, coords, answers]);
+  }, [selected, priced, coords, answers, preOrder?.fault_category]);
 
   const requestDelivery = useCallback(() => {
     if (!selected) return;
     const ctx = answers.vehicle || "";
-    const lines = [`Hello ${selected.name}, I'd like to *request delivery* of spare parts via MOTOFIX (MOTOBOT).`, ""];
+    const lines = [`Hello ${selected.name}, I'd like to *request delivery* of spare parts via MOTOFIX.`, ""];
     if (ctx) lines.push(`For: ${ctx}`, "");
     if (priced.length) {
       lines.push("Parts needed:");
       priced.forEach((p) => lines.push(`• ${p.name}${p.price_min || p.price_max ? ` (est. ${range(p.price_min, p.price_max)})` : ""}`));
     }
-    if (coords) lines.push("", `Please deliver to my location: https://maps.google.com/?q=${coords.lat},${coords.lng}`);
+    if (coords) lines.push("", `Please deliver to my location: https://www.openstreetmap.org/?mlat=${coords.lat}&mlon=${coords.lng}#map=16/${coords.lat}/${coords.lng}`);
     else lines.push("", "Please advise on delivery to my location.");
     lines.push("", "How much for the parts + delivery, and how soon can you get here?");
     const text = encodeURIComponent(lines.join("\n"));
@@ -363,7 +355,8 @@ export default function SparePartsDealer() {
       max = priced.reduce((s, p) => s + (p.price_max || 0), 0);
     partsService
       .createOrder({
-        fault_label: ctx ? `Spare parts (delivery) · ${ctx}` : "Spare parts delivery (MOTOBOT)",
+        fault_category: preOrder?.fault_category ?? undefined,
+        fault_label: ctx ? `Spare parts (delivery) · ${ctx}` : "Spare parts delivery",
         parts: priced.map((p) => ({ name: p.name, price_min: p.price_min, price_max: p.price_max, qty: 1 })),
         dealer_name: selected.name,
         dealer_phone: selected.phone,
@@ -373,56 +366,31 @@ export default function SparePartsDealer() {
       })
       .then(() => toast.success("Delivery request saved to your history"))
       .catch(() => {});
-  }, [selected, priced, coords, answers]);
+  }, [selected, priced, coords, answers, preOrder?.fault_category]);
 
-  const fitDealers = (m: google.maps.Map) => {
-    if (!coords) return;
-    const b = new window.google.maps.LatLngBounds();
-    b.extend(coords);
-    dealers.forEach((d) => b.extend({ lat: d.lat, lng: d.lng }));
-    if (dealers.length) m.fitBounds(b, 60);
-  };
-
-  // In-app turn-by-turn — draw the route on our own map, no leaving for Google Maps.
+  // Show an estimated straight-line route and keep distance/ETA estimates local.
   const showDirections = (d: SimDealer) => {
     if (!coords) {
       toast.error("We need your location to draw the route.");
       return;
     }
-    if (!mapLoaded || !window.google) {
-      toast.error("Map is still loading — try again in a moment.");
-      return;
-    }
     setSelected(null);
     setRouteTo(d);
-    setDirections(null);
-    setRouteInfo(null);
-    setLandmarks([]);
-    setRouteLoading(true);
-    new window.google.maps.DirectionsService().route(
-      { origin: coords, destination: { lat: d.lat, lng: d.lng }, travelMode: window.google.maps.TravelMode.DRIVING },
-      (res, status) => {
-        setRouteLoading(false);
-        if (status === "OK" && res) {
-          setDirections(res);
-          const leg = res.routes[0]?.legs[0];
-          if (leg) {
-            setRouteInfo({ distance: leg.distance?.text ?? "", duration: leg.duration?.text ?? "" });
-            const pts = (leg.steps ?? []).map((s) => ({ lat: s.start_location.lat(), lng: s.start_location.lng() }));
-            fetchLandmarks(pts).then(setLandmarks).catch(() => {});
-          }
-        } else {
-          toast.error("Couldn't find a driving route to this shop.");
-          setRouteTo(null);
-        }
-      }
-    );
+    const destination = { lat: d.lat, lng: d.lng };
+    setDirections([coords, destination]);
+    const distanceKm = Math.max(haversineKm(coords, destination), d.distance_km || 0);
+    const durationMinutes = Math.max(1, Math.round((distanceKm / 30) * 60));
+    setRouteInfo({
+      distance: `${distanceKm.toFixed(1)} km`,
+      duration: durationMinutes < 60
+        ? `${durationMinutes} min`
+        : `${Math.floor(durationMinutes / 60)} hr ${durationMinutes % 60} min`,
+    });
   };
   const closeDirections = () => {
     setRouteTo(null);
     setDirections(null);
     setRouteInfo(null);
-    setLandmarks([]);
   };
 
   // ── Delivery checkout (shopping cart + 50/50 deposit) ──
@@ -444,6 +412,7 @@ export default function SparePartsDealer() {
     setPayState("sending");
     partsService
       .createOrder({
+        fault_category: preOrder?.fault_category ?? undefined,
         fault_label: `Spare-parts delivery · ${[answers.vehicle, carModel].filter(Boolean).join(" ")}`.trim(),
         parts: priced.map((p) => ({ name: p.name, price_min: unitPrice(p), price_max: unitPrice(p), qty: qOf(p.name) })),
         dealer_name: "MOTOFIX Delivery",
@@ -484,7 +453,9 @@ export default function SparePartsDealer() {
           <button onClick={() => setStage("questions")} style={{ width: 36, height: 36, borderRadius: 10, border: "none", cursor: "pointer", background: surface, color: textHi, boxShadow: "0 2px 8px rgba(0,0,0,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <ArrowLeft size={18} />
           </button>
-          <div style={{ flex: 1, fontSize: 12, fontWeight: 800, letterSpacing: "0.26em", color: AMBER_D }}>MOTOFIX · MOTOBOT</div>
+          <div style={{ flex: 1, fontSize: 12, fontWeight: 800, letterSpacing: "0.26em", color: AMBER_D }}>
+            {MOTOBOT_ENABLED ? "MOTOFIX · MOTOBOT" : "MOTOFIX · SPARE PARTS"}
+          </div>
         </div>
         <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 18px 26px" }}>
           <div style={{ maxWidth: 380, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -515,7 +486,7 @@ export default function SparePartsDealer() {
   if (stage === "questions") {
     const TABS: { id: "selffix" | "motobot" | "parts"; label: string; Icon: ElementType }[] = [
       { id: "selffix", label: "Self-Fix", Icon: Wrench },
-      { id: "motobot", label: "MOTOBOT", Icon: Bot },
+      ...(MOTOBOT_ENABLED ? [{ id: "motobot" as const, label: "MOTOBOT", Icon: Bot }] : []),
       { id: "parts", label: "Order Parts", Icon: ShoppingBag },
     ];
     return (
@@ -527,7 +498,9 @@ export default function SparePartsDealer() {
           </button>
           <div style={{ flex: 1 }}>
             <p style={{ color: textHi, fontWeight: 900, fontSize: 17, lineHeight: 1 }}>Spare Parts &amp; Self-Fix</p>
-            <p style={{ color: textLo, fontSize: 11, marginTop: 2 }}>Self-fix guides · MOTOBOT · Order parts</p>
+            <p style={{ color: textLo, fontSize: 11, marginTop: 2 }}>
+              {MOTOBOT_ENABLED ? 'Self-fix guides · MOTOBOT · Order parts' : 'Self-fix guides · Order parts'}
+            </p>
           </div>
           <div style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: `${AMBER}18`, border: `1px solid ${AMBER}40`, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <ShoppingBag style={{ width: 18, height: 18, color: AMBER }} />
@@ -630,7 +603,9 @@ export default function SparePartsDealer() {
               </div>
             </div>
           </div>
-          <div style={{ fontSize: 10.5, color: textLo, lineHeight: 1.5, padding: "0 4px" }}>Prices are MOTOBOT estimates; the supplier confirms the final amount before delivery. A 50% deposit secures your order — the balance is paid on delivery.</div>
+          <div style={{ fontSize: 10.5, color: textLo, lineHeight: 1.5, padding: "0 4px" }}>
+            {MOTOBOT_ENABLED ? "Prices are MOTOBOT estimates" : "Prices are catalogue estimates"}; the supplier confirms the final amount before delivery. A 50% deposit secures your order — the balance is paid on delivery.
+          </div>
         </div>
 
         <div style={{ flexShrink: 0, padding: 12, borderTop: `1px solid ${border}`, background: surface }}>
@@ -699,34 +674,40 @@ export default function SparePartsDealer() {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-        {coords && (
-          <div className="sp-map" style={{ position: "relative", height: "clamp(340px,54vh,540px)", borderRadius: 16, overflow: "hidden", border: `1px solid ${border}`, marginBottom: 16 }}>
-            {mapLoaded ? (
-              <GoogleMap
-                mapContainerStyle={{ width: "100%", height: "100%" }}
-                center={coords}
-                zoom={13}
-                onLoad={(m) => {
-                  mapRef.current = m;
-                  fitDealers(m);
-                }}
-                options={{ disableDefaultUI: true, zoomControl: true, fullscreenControl: true, gestureHandling: "greedy", clickableIcons: false }}
-              >
-                <Marker position={coords} icon={{ url: mapPin("#3B82F6"), scaledSize: new window.google.maps.Size(34, 42), anchor: new window.google.maps.Point(17, 41) }} title="You" />
-                {dealers.slice(0, 10).map((d) => (
-                  <Marker key={d.place_id} position={{ lat: d.lat, lng: d.lng }} icon={{ url: dealerIcon, scaledSize: new window.google.maps.Size(42, 42), anchor: new window.google.maps.Point(21, 21) }} title={d.name} onClick={() => openDealer(d)} />
-                ))}
-              </GoogleMap>
-            ) : (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: textLo, fontSize: 13 }}>Loading map…</div>
+        <div className="sp-map" style={{ position: "relative", height: "clamp(340px,54vh,540px)", borderRadius: 16, overflow: "hidden", border: `1px solid ${border}`, marginBottom: 16 }}>
+          <style>{LEAFLET_BASE_CSS}</style>
+          <MapContainer
+            center={coords ?? KAMPALA}
+            zoom={13}
+            style={{ width: "100%", height: "100%" }}
+            scrollWheelZoom
+          >
+            <MapViewport mapRef={mapRef} center={coords ?? KAMPALA} points={dealerMapPoints} />
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            {coords && (
+              <Marker position={coords} icon={driverLeafletIcon}>
+                <Popup>Your location</Popup>
+              </Marker>
             )}
-            <style>{`
-              .sp-map .gm-style-cc { display: none !important; }
-              .sp-map a[href^="https://maps.google.com/maps"], .sp-map a[href^="https://www.google.com/maps"] { display: none !important; }
-              .sp-map img[alt="Google"] { display: none !important; }
-            `}</style>
-          </div>
-        )}
+            {dealers.slice(0, 10).map((d) => (
+              <Marker
+                key={d.place_id}
+                position={{ lat: d.lat, lng: d.lng }}
+                icon={dealerLeafletIcon}
+                eventHandlers={{ click: () => openDealer(d) }}
+              >
+                <Popup>
+                  <strong>{d.name}</strong>
+                  <br />
+                  {d.vicinity}
+                </Popup>
+              </Marker>
+            ))}
+          </MapContainer>
+        </div>
         {priced.length > 0 && (
           <div style={{ background: surface, border: `1px solid ${border}`, borderRadius: 16, padding: 16, marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: textHi, marginBottom: 10 }}>Estimated prices in Kampala</div>
@@ -917,47 +898,44 @@ export default function SparePartsDealer() {
             </button>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 14.5, fontWeight: 800, color: textHi, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Directions to {routeTo.name}</div>
-              <div style={{ fontSize: 11.5, color: AMBER_D, fontWeight: 700 }}>{routeInfo ? `${routeInfo.distance} · ${routeInfo.duration} drive` : routeLoading ? "Finding the quickest route…" : "—"}</div>
+              <div style={{ fontSize: 11.5, color: AMBER_D, fontWeight: 700 }}>{routeInfo ? `${routeInfo.distance} · ${routeInfo.duration} estimated drive` : "—"}</div>
             </div>
           </div>
           <div className="sp-map" style={{ flex: "0 0 46%", position: "relative" }}>
-            {mapLoaded ? (
-              <GoogleMap
-                mapContainerStyle={{ width: "100%", height: "100%" }}
+            <style>{LEAFLET_BASE_CSS}</style>
+            <MapContainer
+              center={coords ?? { lat: routeTo.lat, lng: routeTo.lng }}
+              zoom={14}
+              style={{ width: "100%", height: "100%" }}
+              scrollWheelZoom
+            >
+              <MapViewport
+                mapRef={mapRef}
                 center={coords ?? { lat: routeTo.lat, lng: routeTo.lng }}
-                zoom={14}
-                options={{ disableDefaultUI: true, zoomControl: true, fullscreenControl: true, gestureHandling: "greedy", clickableIcons: false }}
-              >
-                {coords && <Marker position={coords} icon={{ url: mapPin("#3B82F6"), scaledSize: new window.google.maps.Size(34, 42), anchor: new window.google.maps.Point(17, 41) }} title="You" />}
-                <Marker position={{ lat: routeTo.lat, lng: routeTo.lng }} icon={{ url: dealerIcon, scaledSize: new window.google.maps.Size(42, 42), anchor: new window.google.maps.Point(21, 21) }} title={routeTo.name} />
-                {directions && <DirectionsRenderer directions={directions} options={{ suppressMarkers: true, polylineOptions: { strokeColor: AMBER, strokeWeight: 6, strokeOpacity: 0.95 } }} />}
-              </GoogleMap>
-            ) : (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: textLo, fontSize: 13 }}>Loading map…</div>
-            )}
+                points={directions ?? undefined}
+              />
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              {coords && (
+                <Marker position={coords} icon={driverLeafletIcon}>
+                  <Popup>Your location</Popup>
+                </Marker>
+              )}
+              <Marker position={{ lat: routeTo.lat, lng: routeTo.lng }} icon={dealerLeafletIcon}>
+                <Popup>{routeTo.name}</Popup>
+              </Marker>
+              {directions && <Polyline positions={directions} pathOptions={{ color: AMBER, weight: 6, opacity: 0.95 }} />}
+            </MapContainer>
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-            {routeLoading && !directions && (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, color: textMd, fontSize: 13, padding: 20 }}>
-                <Loader2 size={18} className="sp-spin" style={{ color: AMBER }} /> Calculating the shortest route…
-              </div>
-            )}
             {directions && (
               <>
-                <div style={{ fontSize: 11, fontWeight: 800, color: textHi, marginBottom: 10, letterSpacing: "0.05em" }}>STEP-BY-STEP</div>
-                {(directions.routes[0]?.legs[0]?.steps ?? []).map((s, i) => {
-                  const lm = nearestLandmark({ lat: s.start_location.lat(), lng: s.start_location.lng() }, landmarks);
-                  return (
-                    <div key={i} style={{ display: "flex", gap: 12, padding: "11px 0", borderBottom: `1px solid ${border}` }}>
-                      <span style={{ width: 24, height: 24, borderRadius: "50%", flexShrink: 0, background: "rgba(245,158,11,0.16)", color: AMBER_D, fontSize: 12, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, color: textHi, lineHeight: 1.45 }} dangerouslySetInnerHTML={{ __html: s.instructions }} />
-                        {lm && <div style={{ fontSize: 12, color: AMBER_D, fontWeight: 700, marginTop: 3 }}>📍 near {lm}</div>}
-                        {s.distance?.text && <div style={{ fontSize: 11, color: textLo, marginTop: 3 }}>{s.distance.text}</div>}
-                      </div>
-                    </div>
-                  );
-                })}
+                <div style={{ fontSize: 11, fontWeight: 800, color: textHi, marginBottom: 10, letterSpacing: "0.05em" }}>ROUTE ESTIMATE</div>
+                <div style={{ fontSize: 13, color: textMd, lineHeight: 1.5, padding: "11px 0", borderBottom: `1px solid ${border}` }}>
+                  Follow the highlighted straight-line route toward {routeTo.name}. Use local roads and signs to complete the trip.
+                </div>
                 <div style={{ display: "flex", gap: 12, padding: "11px 0", alignItems: "center" }}>
                   <span style={{ width: 24, height: 24, borderRadius: "50%", flexShrink: 0, background: AMBER, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <MapPin size={13} />
@@ -967,21 +945,18 @@ export default function SparePartsDealer() {
               </>
             )}
           </div>
-          {/* fallback — open the full route in Google Maps (leaves the app) */}
+          {/* Optional external route using OpenStreetMap routing. */}
           <div style={{ flexShrink: 0, padding: 12, borderTop: `1px solid ${border}`, background: surface }}>
             <a
-              href={`https://www.google.com/maps/dir/?api=1${coords ? `&origin=${coords.lat},${coords.lng}` : ""}&destination=${routeTo.lat},${routeTo.lng}&travelmode=driving`}
+              href={`https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coords ? `${coords.lat}%2C${coords.lng}%3B` : ""}${routeTo.lat}%2C${routeTo.lng}`}
               target="_blank"
               rel="noopener noreferrer"
               style={{ width: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "13px 0", borderRadius: 14, background: surface2, border: `1.5px solid ${border}`, color: textMd, textDecoration: "none", fontSize: 13.5, fontWeight: 700 }}
             >
-              <Navigation size={16} /> Use Google Maps instead
+              <Navigation size={16} /> Open route in OpenStreetMap
             </a>
           </div>
           <style>{`
-            .sp-map .gm-style-cc { display: none !important; }
-            .sp-map a[href^="https://maps.google.com/maps"], .sp-map a[href^="https://www.google.com/maps"] { display: none !important; }
-            .sp-map img[alt="Google"] { display: none !important; }
             @keyframes sp-spin { to { transform: rotate(360deg); } }
             .sp-spin { animation: sp-spin 0.9s linear infinite; }
           `}</style>

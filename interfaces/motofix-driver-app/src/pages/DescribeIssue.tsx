@@ -7,6 +7,7 @@ import { useState, useLayoutEffect, useEffect, useRef, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { ArrowLeft, MapPin, Send, Sparkles } from 'lucide-react'
 import { authService, requestsService, diagnosisService, partsService, type DiagnosisResult } from '@/config/api'
+import { MOTOBOT_ENABLED } from '@/config/features'
 import { useAuth } from '@/hooks/useAuth'
 
 /* ── Admin catalog override ───────────────────────────────────────────────────
@@ -380,7 +381,10 @@ export default function DescribeIssue() {
   // Transparent MOTOBOT cost estimate — fetched once when the screen opens.
   // Skip if we restored a photo-based analysis (it's more accurate than the text one).
   useEffect(() => {
-    if (savedPhoto) return
+    if (!MOTOBOT_ENABLED || savedPhoto) {
+      setEstimateLoading(false)
+      return
+    }
     let cancelled = false
     const seed = (aiSummary && aiSummary.trim())
       || routeState?.reRequestDescription?.trim()
@@ -396,6 +400,11 @@ export default function DescribeIssue() {
 
   // Driver photographs the damage → MOTOBOT re-checks repairable-vs-replace from the image.
   const handlePhoto = async (file: File) => {
+    if (!MOTOBOT_ENABLED) {
+      setPhotoFile(file)
+      setPhotoError('')
+      return
+    }
     setPhotoError('')
     setPhotoChecking(true)
     // Is this the exact same photo as the last one we analysed? (fingerprint match)
@@ -439,7 +448,7 @@ export default function DescribeIssue() {
     }
   }
   const photoVerdict = (() => {
-    if (!photoChecked || !estimate) return null
+    if (!MOTOBOT_ENABLED || !photoChecked || !estimate) return null
     // Prefer MOTOBOT's decisive call from the photo; fall back to a heuristic if absent.
     const rec = (estimate.repair_or_replace || '').toLowerCase()
     const reason = estimate.repair_or_replace_reason?.trim()
@@ -789,7 +798,7 @@ export default function DescribeIssue() {
           )}
         </div>
 
-        {/* AI cost estimate — transparency before the driver commits */}
+        {MOTOBOT_ENABLED && (
         <div style={{ borderRadius: 16, border: '1px solid var(--border-2)', background: 'var(--surface-1)', padding: 16, margin: '0 0 18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <Sparkles style={{ width: 16, height: 16, color: AMBER }} />
@@ -912,6 +921,13 @@ export default function DescribeIssue() {
             </p>
           )}
         </div>
+        )}
+        {!MOTOBOT_ENABLED && (
+          <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, margin: '0 0 18px', padding: '11px 0', borderRadius: 12, border: `1.5px dashed ${AMBER}66`, background: 'rgba(245,158,11,0.06)', color: AMBRD, fontSize: 12.5, fontWeight: 800, cursor: dispatchPhase === 'idle' ? 'pointer' : 'not-allowed' }}>
+            📷 {photoFile ? 'Change photo for your provider' : 'Attach a photo for your provider (optional)'}
+            <input type="file" accept="image/*" disabled={dispatchPhase !== 'idle'} style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) handlePhoto(f); e.currentTarget.value = '' }} />
+          </label>
+        )}
 
         {/* Action buttons */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingBottom: 24 }}>

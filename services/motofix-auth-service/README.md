@@ -30,7 +30,7 @@ Interactive API docs at `/docs`. Main groups:
 |----------|---------|
 | `DATABASE_URL` | Postgres connection (motofix_auth). |
 | `SECRET_KEY` / `ALGORITHM` | JWT signing (must match the other services). |
-| `ACCESS_TOKEN_EXPIRE_HOURS` / `ACCESS_TOKEN_EXPIRE_SECONDS` | Driver/provider token lifetime. |
+| `ACCESS_TOKEN_EXPIRE_HOURS` | Driver/provider token lifetime (default `87600`, about 10 years). |
 | `ADMIN_TOKEN_EXPIRE_HOURS` | Admin token lifetime. |
 | `AT_USERNAME` / `AT_API_KEY` | Africa's Talking creds for OTP SMS. Falls back to printing the OTP to the server console if unset. |
 | `ANTHROPIC_API_KEY` | Claude key for AI document verification. |
@@ -38,6 +38,9 @@ Interactive API docs at `/docs`. Main groups:
 | `PROVIDER_APP_URL` | Provider app base URL (used in application emails/links). |
 | `DISPATCH_SERVICE_URL` / `DISPATCH_DATABASE_URL` | Cross-service calls/reads to dispatch. |
 | `ENV` | `development` / `production` (controls secure-cookie flags). |
+
+Driver sessions do not expire due to inactivity. OTP is required only after
+explicit logout, a new install, or cleared app data—not for periodic re-authentication.
 
 ## Run locally
 

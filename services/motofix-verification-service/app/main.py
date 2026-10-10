@@ -32,6 +32,7 @@ def _require_secret() -> str:
 
 from app.routers import mechanics
 from app.routers import auth as auth_router
+from app.launch_data import ensure_launch_areas
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,8 +66,10 @@ async def lifespan(app: FastAPI):
         """)
     logger.info("✅ mechanics table ensured")
 
-    # Safe migrations — add any missing columns (all idempotent)
+    # Idempotent schema migrations. GPS stays nullable: area-only profiles are valid.
     migrations = [
+        "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS name TEXT",
+        "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS location TEXT",
         "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS password_hash TEXT",
         "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS specialty TEXT DEFAULT 'General Repair'",
         "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS vehicle_type TEXT DEFAULT 'car'",
@@ -76,14 +79,41 @@ async def lifespan(app: FastAPI):
         "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS jobs_completed INTEGER DEFAULT 0",
         "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS latitude FLOAT",
         "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS longitude FLOAT",
+        "ALTER TABLE mechanics ADD COLUMN IF NOT EXISTS fcm_token TEXT",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_mechanics_phone_unique ON mechanics(phone)",
+        "ALTER TABLE mechanics ALTER COLUMN location DROP NOT NULL",
+        "ALTER TABLE mechanics ALTER COLUMN latitude DROP NOT NULL",
+        "ALTER TABLE mechanics ALTER COLUMN longitude DROP NOT NULL",
     ]
-    try:
-        async with pool.acquire() as conn:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
             for sql in migrations:
                 await conn.execute(sql)
-        logger.info("✅ All column migrations applied successfully")
-    except Exception as e:
-        logger.warning(f"⚠️  Migration error (non-fatal): {e}")
+            await conn.execute("""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'mechanics'
+                      AND column_name = 'full_name'
+                    ) THEN
+                        EXECUTE format(
+                            'UPDATE mechanics SET name = COALESCE(NULLIF(name, %L), full_name) WHERE full_name IS NOT NULL',
+                            ''
+                        );
+                        ALTER TABLE mechanics ALTER COLUMN full_name DROP NOT NULL;
+                    END IF;
+                END $$
+            """)
+            await ensure_launch_areas(conn)
+
+            await conn.execute("""
+                UPDATE mechanics
+                SET is_verified = COALESCE(is_verified, false),
+                    is_available = COALESCE(is_available, true)
+            """)
+    logger.info("✅ Mechanics schema and Kampala service areas are ready")
 
     yield
     await pool.close()

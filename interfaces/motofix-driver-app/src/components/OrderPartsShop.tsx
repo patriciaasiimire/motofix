@@ -3,7 +3,7 @@
 // with a nearby dealer (the order is sent to the dealer via WhatsApp and saved as the
 // driver's order history). Big component because it covers browse → cart → order.
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import type { ElementType } from 'react'
 import {
   ArrowLeft, Search, X, ChevronDown, ShoppingBag, ShoppingCart,
@@ -13,9 +13,11 @@ import {
 } from 'lucide-react'
 import { useTheme } from '@/contexts/ThemeContext'
 import { partsService, motobotService, type PartsOrder } from '@/config/api'
+import { MOTOBOT_ENABLED } from '@/config/features'
 import { toast } from 'sonner'
 
 const PURPLE = '#A78BFA'
+const DELIVERY = { min: 5000, max: 20000 }
 
 function fmtUGX(n: number) { return `UGX ${Math.round(n).toLocaleString('en-UG')}` }
 function waDigits(raw?: string): string {
@@ -42,6 +44,28 @@ const CATS: { id: string; label: string; color: string; Icon: ElementType }[] = 
   { id: 'lights',     label: 'Lights',             color: '#FBBF24', Icon: Lightbulb },
   { id: 'fasteners',  label: 'Fasteners',          color: '#9CA3AF', Icon: Wrench },
 ]
+
+const FAULT_CATEGORIES = [
+  { id: 'engine', label: 'Engine' },
+  { id: 'brakes_suspension', label: 'Brakes & Suspension' },
+  { id: 'electrical', label: 'Electrical' },
+  { id: 'tyres_wheels', label: 'Tyres & Wheels' },
+  { id: 'transmission', label: 'Transmission' },
+  { id: 'battery', label: 'Battery' },
+  { id: 'other', label: 'Other' },
+]
+
+const faultCategoryForPart: Record<string, string> = {
+  tyres: 'tyres_wheels',
+  engine: 'engine',
+  brakes: 'brakes_suspension',
+  electrical: 'electrical',
+  filters: 'engine',
+  suspension: 'brakes_suspension',
+  body: 'other',
+  lights: 'electrical',
+  fasteners: 'other',
+}
 
 const QTY: Spec = { key: 'qty', label: 'Quantity', type: 'number' }
 const TYRE_BRANDS = ['Michelin', 'Bridgestone', 'Dunlop', 'Continental', 'Yokohama', 'Maxxis', 'Goodyear', 'Other']
@@ -132,6 +156,7 @@ export default function OrderPartsShop() {
   const [query, setQuery]     = useState('')
   const [catFilter, setCatFilter] = useState('All')
   const [item, setItem]       = useState<Item | null>(null)
+  const [faultCategory, setFaultCategory] = useState('')
   const [cfg, setCfg]         = useState<Cfg>({})
   const [makeOpen, setMakeOpen] = useState(false)
 
@@ -173,6 +198,7 @@ export default function OrderPartsShop() {
 
   const openItem = (it: Item) => {
     setItem(it)
+    setFaultCategory(faultCategoryForPart[it.cat] ?? 'other')
     const init: Cfg = {}
     it.specs.forEach(s => { if (s.key === 'qty' || s.key === 'litres') init[s.key] = '1' })
     setCfg(init)
@@ -202,13 +228,15 @@ export default function OrderPartsShop() {
     setSuppliers([])
     setDispatched(null)
 
-    // 1) AI price (per-unit) — fall back to the catalogue range if unavailable.
+    // Keep the curated catalogue estimate when MOTOBOT is disabled or unavailable.
     let unit = { min: item.min, max: item.max }
-    try {
-      const res = await motobotService.priceItems([partString()])
-      const p = res.data.items?.[0]
-      if (p && (p.price_min || p.price_max)) unit = { min: p.price_min || item.min, max: p.price_max || item.max }
-    } catch { /* keep catalogue range */ }
+    if (MOTOBOT_ENABLED) {
+      try {
+        const res = await motobotService.priceItems([partString()])
+        const p = res.data.items?.[0]
+        if (p && (p.price_min || p.price_max)) unit = { min: p.price_min || item.min, max: p.price_max || item.max }
+      } catch { /* keep catalogue range */ }
+    }
     setAiPrice(unit)
 
     // 2) Nearby spare-parts suppliers (OSM, same source as the dealer finder).
@@ -230,8 +258,10 @@ export default function OrderPartsShop() {
   }, [item, partString])
 
   // Totals (incl. delivery & transport).
-  const DELIVERY = { min: 5000, max: 20000 }
-  const total = aiPrice ? { min: aiPrice.min * qty + DELIVERY.min, max: aiPrice.max * qty + DELIVERY.max } : null
+  const total = useMemo(
+    () => aiPrice ? { min: aiPrice.min * qty + DELIVERY.min, max: aiPrice.max * qty + DELIVERY.max } : null,
+    [aiPrice, qty],
+  )
 
   const dispatchTo = useCallback((s: Supplier) => {
     if (!item || !total) return
@@ -249,6 +279,7 @@ export default function OrderPartsShop() {
     window.open(digits ? `https://wa.me/${digits}?text=${text}` : `https://wa.me/?text=${text}`, '_blank')
 
     partsService.createOrder({
+      fault_category: faultCategory,
       fault_label: `${partString()} ×${qty}`,
       parts: [{ name: partString(), price_min: total.min, price_max: total.max, qty }],
       dealer_name: s.name ?? null,
@@ -256,9 +287,11 @@ export default function OrderPartsShop() {
       dealer_place_id: s.place_id ?? null,
       estimated_total_min: total.min,
       estimated_total_max: total.max,
-    }).then(() => toast.success('Order sent & saved to your history')).catch(() => {})
+    }).then(() => toast.success('Order saved to your history')).catch(() => {
+      toast.error('WhatsApp opened, but the order could not be saved to your history.')
+    })
     setDispatched(s)
-  }, [item, total, qty, partString])
+  }, [item, faultCategory, total, qty, partString])
 
   const openOrders = () => {
     setOrdersOpen(true); setOrdersLoading(true)
@@ -356,6 +389,17 @@ export default function OrderPartsShop() {
 
             {/* Spec questions */}
             <p style={{ color: textLo, fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.14em', marginBottom: 10 }}>Tell us what you need</p>
+            <div style={{ marginBottom: 14 }}>
+              <label htmlFor="parts-fault-category" style={{ color: textMd, fontSize: 12.5, fontWeight: 700, display: 'block', marginBottom: 6 }}>Issue category</label>
+              <select
+                id="parts-fault-category"
+                value={faultCategory}
+                onChange={e => setFaultCategory(e.target.value)}
+                style={{ width: '100%', background: 'var(--surface-2)', border: '1px solid var(--border-2)', borderRadius: 11, padding: '10px 12px', color: textHi, fontSize: 14 }}
+              >
+                {FAULT_CATEGORIES.map(category => <option key={category.id} value={category.id}>{category.label}</option>)}
+              </select>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 18 }}>
               {item.specs.map(s => (
                 <div key={s.key}>
@@ -395,7 +439,7 @@ export default function OrderPartsShop() {
             {cfg.make && (
               <div style={{ animation: 'ops-fade 0.3s ease both', marginBottom: 8 }}>
                 <p style={{ color: textMd, fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                  <Sparkles size={13} style={{ color: col }} /> MOTOBOT matched these {cfg.make} models — pick yours
+                  <Sparkles size={13} style={{ color: col }} /> Available {cfg.make} models — pick yours
                 </p>
                 {cfg.make === 'Other' || (makeObj && makeObj.models.length === 0) ? (
                   <input value={cfg.model ?? ''} onChange={e => setCfg(c => ({ ...c, model: e.target.value }))} placeholder="Type your car model"
@@ -437,7 +481,11 @@ export default function OrderPartsShop() {
           </div>
           <div style={{ textAlign: 'center' }}>
             <p style={{ color: textHi, fontWeight: 900, fontSize: 18, marginBottom: 6 }}>Finding suppliers near you…</p>
-            <p style={{ color: textLo, fontSize: 13, lineHeight: 1.6, maxWidth: 280 }}>MOTOBOT is pricing your part and matching it with spare-parts suppliers in your area.</p>
+            <p style={{ color: textLo, fontSize: 13, lineHeight: 1.6, maxWidth: 280 }}>
+              {MOTOBOT_ENABLED
+                ? 'MOTOBOT is pricing your part and matching it with spare-parts suppliers in your area.'
+                : 'Using the catalogue estimate while we find spare-parts suppliers in your area.'}
+            </p>
           </div>
           <Loader2 size={22} style={{ color: PURPLE, animation: 'ops-spin 0.9s linear infinite' }} />
         </div>
@@ -453,7 +501,7 @@ export default function OrderPartsShop() {
               </div>
               <p style={{ color: textHi, fontWeight: 900, fontSize: 19, marginBottom: 8 }}>Request sent</p>
               <p style={{ color: textMd, fontSize: 13.5, lineHeight: 1.65, marginBottom: 22, maxWidth: 300, marginLeft: 'auto', marginRight: 'auto' }}>
-                Your order for <strong style={{ color: textHi }}>{partString()}</strong> (×{qty}) was sent to <strong style={{ color: textHi }}>{dispatched.name}</strong>. They'll confirm availability and final price. It's saved in your orders.
+                Your order for <strong style={{ color: textHi }}>{partString()}</strong> (×{qty}) was sent to <strong style={{ color: textHi }}>{dispatched.name}</strong>. They'll confirm availability and final price. Check My Orders to confirm it was saved.
               </p>
               <button onClick={() => { setStep('shop'); setItem(null) }} style={{ width: '100%', maxWidth: 280, height: 48, borderRadius: 14, border: 'none', cursor: 'pointer', background: `linear-gradient(135deg, ${PURPLE}, #7C3AED)`, color: '#fff', fontWeight: 800, fontSize: 14.5 }}>Back to Shop</button>
             </div>
@@ -465,7 +513,10 @@ export default function OrderPartsShop() {
                 <p style={{ color: textLo, fontSize: 12, marginBottom: 12 }}>Quantity: {qty}</p>
                 <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', paddingTop: 12, borderTop: '1px dashed var(--border-2)' }}>
                   <div>
-                    <p style={{ color: textLo, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}><Sparkles size={11} style={{ color: PURPLE }} /> MOTOBOT estimate · incl. delivery</p>
+                    <p style={{ color: textLo, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {MOTOBOT_ENABLED && <Sparkles size={11} style={{ color: PURPLE }} />}
+                      {MOTOBOT_ENABLED ? 'MOTOBOT estimate' : 'Catalogue estimate'} · incl. delivery
+                    </p>
                     <p style={{ color: PURPLE, fontWeight: 900, fontSize: 20, marginTop: 3 }}>{fmtUGX(total.min)} – {fmtUGX(total.max)}</p>
                   </div>
                   <span style={{ fontSize: 10.5, color: textLo, display: 'flex', alignItems: 'center', gap: 4 }}><Truck size={12} /> +{fmtUGX(DELIVERY.min)}–{fmtUGX(DELIVERY.max)} transport</span>

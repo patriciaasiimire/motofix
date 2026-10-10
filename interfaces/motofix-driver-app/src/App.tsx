@@ -16,18 +16,18 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { BottomNav } from "@/components/BottomNav";
 import { MotobotFab } from "@/components/MotobotFab";
 import { PrivateRoute } from "@/components/PrivateRoute";
 import { NetworkBanner } from "@/components/NetworkBanner";
-import InactivityGuard from "@/components/InactivityGuard";
 import { RequestProvider, useRequests } from "@/contexts/RequestContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
 import { useAuth } from "@/hooks/useAuth";
 import { useFcmToken } from "@/hooks/useFcmToken";
 import { useReminderScheduler } from "@/hooks/useReminderScheduler";
+import { MOTOBOT_ENABLED } from "@/config/features";
 import Splash from "./pages/Splash";
 import Welcome from "./pages/Welcome";
 import DriverEntry from "./pages/DriverEntry";
@@ -82,7 +82,6 @@ function AppContent() {
     <>
       <NetworkBanner />
       {/* QuoteModal retired — replaced by the in-job FinalPaymentFlow (see RequestDetail). */}
-      <InactivityGuard />
       <Routes>
         <Route path="/" element={<Splash />} />
         <Route path="/welcome" element={<Welcome />} />
@@ -166,7 +165,9 @@ function AppContent() {
           path="/fault-chat"
           element={
             <PrivateRoute>
-              <FaultChat />
+              {MOTOBOT_ENABLED
+                ? <FaultChat />
+                : <Navigate to="/describe-issue" replace state={location.state} />}
             </PrivateRoute>
           }
         />
@@ -285,7 +286,7 @@ function AppContent() {
         <Route path="*" element={<NotFound />} />
       </Routes>
       {showBottomNav && <BottomNav />}
-      {showBottomNav && isAuthenticated && <MotobotFab />}
+      {MOTOBOT_ENABLED && showBottomNav && isAuthenticated && <MotobotFab />}
     </>
   );
 }

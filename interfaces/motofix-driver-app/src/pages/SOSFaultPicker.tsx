@@ -15,6 +15,7 @@ import {
   Truck, HelpCircle, Sparkles, Wrench, AlertTriangle,
 } from 'lucide-react';
 import { useRequests } from '@/contexts/RequestContext';
+import { MOTOBOT_ENABLED } from '@/config/features';
 
 const R  = '#ff2d2d';
 const Y  = '#F59E0B';
@@ -271,7 +272,7 @@ export default function SOSFaultPicker() {
     if (fault.id === 'fuel') {
       setShowFuelFlow(true);
     } else if (fault.id === 'other') {
-      navigate('/fault-chat', { state: { issueType: 'other' } });
+      navigate(MOTOBOT_ENABLED ? '/fault-chat' : '/describe-issue', { state: { issueType: 'other' } });
     } else {
       navigate('/locating', { state: { issueType: fault.id, serviceType: fault.serviceType } });
     }
@@ -386,8 +387,7 @@ export default function SOSFaultPicker() {
         </div>
       </div>
 
-      {/* ── AI footer ── */}
-      <div style={{
+      {MOTOBOT_ENABLED && <div style={{
         flexShrink: 0, padding: '10px 14px',
         paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 76px), 84px)',
         borderTop: '1px solid var(--border-1)',
@@ -423,7 +423,7 @@ export default function SOSFaultPicker() {
             <p style={{ color: 'var(--text-lo)', fontSize: 10.5, marginTop: 2 }}>MOTOFIX AI will ask a few questions</p>
           </div>
         </button>
-      </div>
+      </div>}
 
       <style>{`
         @keyframes sos-ring {
