@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import axios from 'axios';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronLeft, MapPin, Wrench, Clock, Phone, Loader2,
@@ -15,7 +16,7 @@ import {
 import L from 'leaflet';
 import { MapContainer, Marker, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import OpenFreeMapLayer from '@/components/OpenFreeMapLayer';
-import { requestsService, paymentsService, mechanicService, chatService } from '@/config/api';
+import { requestsService, paymentsService, mechanicService, chatService, SERVICE_AREAS } from '@/config/api';
 import type { MechanicPublicProfile } from '@/config/api';
 import MechanicAssignedCard from '@/components/MechanicAssignedCard';
 import FinalPaymentFlow from '@/components/FinalPaymentFlow';
@@ -72,13 +73,16 @@ function normalizeRequest(value: unknown): Request | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
   if (typeof raw.id !== 'string' && typeof raw.id !== 'number') return null;
+  const workflowStatus = typeof raw.workflow_status === 'string' ? raw.workflow_status : raw.status;
   return {
     ...raw,
     id: raw.id,
     service_type: typeof raw.service_type === 'string' ? raw.service_type : 'Roadside assistance',
     location: typeof raw.location === 'string' ? raw.location : '',
     description: typeof raw.description === 'string' ? raw.description : '',
-    status: typeof raw.status === 'string' ? raw.status : 'pending',
+    status: typeof workflowStatus === 'string'
+      ? workflowStatus
+      : raw.status === 'searching' ? 'pending' : raw.status === 'assigned' ? 'accepted' : 'pending',
   };
 }
 
@@ -718,7 +722,9 @@ export default function RequestDetail() {
 
   // Always watch device GPS on this page — the live position is the source of truth.
   // GPS stops only when request is completed or cancelled (nothing left to track).
-  const isActive = !!request && !['completed', 'cancelled', 'awaiting_confirmation'].includes(request?.status ?? '');
+  const hasStoredLocation = (request?.latitude != null && request?.longitude != null) || mapCoords != null;
+  const isActive = !!request && hasStoredLocation &&
+    !['completed', 'cancelled', 'awaiting_confirmation'].includes(request?.status ?? '');
   const { lat: gpsLat, lng: gpsLng, accuracy: gpsAccuracy } = useGeoLocation(isActive);
 
   // ── Load request ──────────────────────────────────────────────────────────
@@ -735,7 +741,7 @@ export default function RequestDetail() {
   }, [id, requests]);
 
   useEffect(() => {
-    const live = requests.find((r) => String(r.id) === id);
+    const live = normalizeRequest(requests.find((r) => String(r.id) === id));
     if (!live) return;
     // Never downgrade a terminal status (e.g. a stale context snapshot showing
     // awaiting_confirmation must not overwrite a confirmed 'completed').
@@ -744,6 +750,15 @@ export default function RequestDetail() {
       return live;
     });
   }, [requests, id]);
+
+  useEffect(() => {
+    const handleNoMatch = (event: Event) => {
+      const detail = (event as CustomEvent<{ request_id?: string }>).detail;
+      if (String(detail?.request_id ?? '') === String(id)) setNoProviders(true);
+    };
+    window.addEventListener('motofix:matching-empty', handleNoMatch);
+    return () => window.removeEventListener('motofix:matching-empty', handleNoMatch);
+  }, [id]);
 
   // Pre-fill MoMo number from stored user profile
   useEffect(() => {
@@ -1100,6 +1115,7 @@ export default function RequestDetail() {
 
   const canCancel = new Set(['pending', 'accepted', 'en_route', 'arrived']).has(request?.status ?? '');
   const canCall = request?.status === 'accepted' || request?.status === 'en_route';
+  const mechanicPhoneToShow = mechanicPhone ?? request?.matched_mechanic_phone ?? null;
 
   const handleCancelConfirm = async () => {
     if (!id) return;
@@ -1128,7 +1144,11 @@ export default function RequestDetail() {
 
   const handleCall = async () => {
     if (!id || !canCall) return;
-    if (mechanicPhone) { setShowCallSheet(true); return; }
+    if (mechanicPhoneToShow) {
+      setMechanicPhone(mechanicPhoneToShow);
+      setShowCallSheet(true);
+      return;
+    }
     setIsCalling(true);
     try {
       const res = await requestsService.getCallPartner(id);
@@ -1146,14 +1166,37 @@ export default function RequestDetail() {
   const handleTryAgain = async () => {
     if (!id) return;
     setIsTryingAgain(true);
+    setNoProviders(false);
     try {
       const res = await requestsService.redispatch(id);
       const updated = res.data?.request ?? res.data;
-      if (updated) setRequest((prev: any) => ({ ...prev, ...updated }));
-      setNoProviders(false);
+      const normalized = normalizeRequest(updated);
+      if (normalized) setRequest(normalized);
       toast('Looking for mechanics again…', { icon: '🔍' });
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to redispatch. Please try again.');
+    } finally {
+      setIsTryingAgain(false);
+    }
+  };
+
+  const handleChangeArea = async () => {
+    if (!id || !request) return;
+    setIsTryingAgain(true);
+    try {
+      await requestsService.updateStatus(id, 'cancelled', 'Driver is changing the service area');
+      markCancelled(id);
+      setNoProviders(false);
+      navigate('/get-help/location', {
+        replace: true,
+        state: {
+          serviceType: /tow|recovery/i.test(request.service_type) ? 'tow' : 'mechanic',
+          issueType: request.issue_type || 'general',
+        },
+      });
+    } catch (err: unknown) {
+      const detail = axios.isAxiosError<{ detail?: unknown }>(err) ? err.response?.data?.detail : null;
+      toast.error(typeof detail === 'string' ? detail : 'Could not cancel this request to change area.');
     } finally {
       setIsTryingAgain(false);
     }
@@ -1233,6 +1276,7 @@ export default function RequestDetail() {
 
   const shortId = `#${String(request.id).padStart(6, '0')}`;
   const badge = STATUS_BADGE[request.status] ?? STATUS_BADGE.pending;
+  const matchedMechanicName = request.mechanic_name ?? request.matched_mechanic_name ?? null;
   const currentStep = stepIndex(request.status);
   const isCancelled = request.status === 'cancelled';
 
@@ -1437,7 +1481,11 @@ export default function RequestDetail() {
             <MapPin className="w-5 h-5 shrink-0 mt-0.5" style={{ color: '#F59E0B' }} />
             <div>
               <p className="text-xs mb-0.5" style={{ color: '#F59E0B', fontWeight: 700 }}>Location</p>
-              <p className="text-sm text-foreground">{displayLocation || request.location || '—'}</p>
+              <p className="text-sm text-foreground">
+                {displayLocation || request.location_text ||
+                  SERVICE_AREAS.find((area) => area.id === request.area_id)?.name ||
+                  request.location || '—'}
+              </p>
             </div>
           </div>
           {request.description && (
@@ -1465,17 +1513,17 @@ export default function RequestDetail() {
         </div>
 
         {/* Mechanic info card — shown once accepted */}
-        {(request.status === 'accepted' || request.status === 'en_route' || request.status === 'arrived' || request.status === 'service_started') && request.mechanic_name && (
+        {(request.status === 'accepted' || request.status === 'en_route' || request.status === 'arrived' || request.status === 'service_started') && matchedMechanicName && (
           <div className="glass-card rounded-2xl overflow-hidden animate-slide-up" style={{ animationDelay: '0.1s' }}>
             {/* Avatar + name row */}
             <div style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: 14, borderBottom: '1px solid var(--border-2)' }}>
               {/* Profile photo placeholder — replace src with mechanic.photo_url when available */}
               <div style={{ width: 58, height: 58, borderRadius: '50%', background: 'linear-gradient(135deg, #F59E0B, #D97706)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 4px 14px rgba(245,158,11,0.45)', fontSize: 20, fontWeight: 800, color: '#000' }}>
-                {(request.mechanic_name ?? 'M').split(' ').map((p: string) => p[0]).slice(0, 2).join('').toUpperCase()}
+                {matchedMechanicName.split(' ').map((p: string) => p[0]).slice(0, 2).join('').toUpperCase()}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 3 }}>Your Mechanic</p>
-                <p style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-hi)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{request.mechanic_name}</p>
+                <p style={{ fontSize: 16, fontWeight: 800, color: 'var(--text-hi)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{matchedMechanicName}</p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4 }}>
                   <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#22C55E', boxShadow: '0 0 5px #22C55E', flexShrink: 0 }} />
                   {request.status === 'en_route' && <span style={{ fontSize: 11, color: '#F59E0B', fontWeight: 600 }}>On the way to you</span>}
@@ -1487,10 +1535,10 @@ export default function RequestDetail() {
             </div>
 
             {/* Contact details */}
-            {mechanicPhone && (
+            {mechanicPhoneToShow && (
               <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-2)', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Phone style={{ width: 13, height: 13, color: 'var(--text-faint)', flexShrink: 0 }} />
-                <span style={{ fontSize: 13, color: 'var(--text-md)' }}>{mechanicPhone}</span>
+                <span style={{ fontSize: 13, color: 'var(--text-md)' }}>{mechanicPhoneToShow}</span>
               </div>
             )}
 
@@ -2089,6 +2137,13 @@ export default function RequestDetail() {
                 style={{ width: '100%', height: 54, borderRadius: 16, border: 'none', background: '#ff2d2d', color: '#fff', fontWeight: 800, fontSize: 15, cursor: 'pointer' }}
               >
                 Cancel Request
+              </button>
+              <button
+                onClick={handleChangeArea}
+                disabled={isTryingAgain}
+                style={{ width: '100%', height: 48, borderRadius: 14, border: '1px solid var(--border-3)', background: 'var(--surface-3)', color: 'var(--text-hi)', fontWeight: 700, fontSize: 14, cursor: isTryingAgain ? 'not-allowed' : 'pointer' }}
+              >
+                Change area
               </button>
             </div>
           </div>

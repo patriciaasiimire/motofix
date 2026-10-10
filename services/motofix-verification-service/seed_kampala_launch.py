@@ -95,8 +95,10 @@ async def seed() -> None:
                 raise RuntimeError(
                     f"Expected {len(KAMPALA_LAUNCH_MECHANICS)} eligible seed mechanics; found {count}"
                 )
-            if area_count != 18:
-                raise RuntimeError(f"Expected 18 Kampala launch service areas; found {area_count}")
+            if area_count != len(KAMPALA_SERVICE_AREAS):
+                raise RuntimeError(
+                    f"Expected {len(KAMPALA_SERVICE_AREAS)} Kampala service areas; found {area_count}"
+                )
         print(f"Seeded/updated {count} verified, available mechanics and {area_count} launch areas.")
     finally:
         await conn.close()

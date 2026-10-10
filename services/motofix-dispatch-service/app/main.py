@@ -289,6 +289,10 @@ async def run_migrations(db_pool: asyncpg.Pool):
                 ALTER TABLE service_requests
                 ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP NULL
             """)
+            await conn.execute("""
+                ALTER TABLE service_requests
+                ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+            """)
             # ETA (minutes) the mechanic estimated when starting the journey — used to
             # show a shared arrival-time window on both the driver and mechanic apps.
             await conn.execute("""
@@ -307,6 +311,29 @@ async def run_migrations(db_pool: asyncpg.Pool):
                 ADD COLUMN IF NOT EXISTS completion_by VARCHAR(16) NULL
             """)
             logger.info("✅ service_requests lifecycle timestamp columns ensured")
+
+            # ── v1 request model columns (area-based, no GPS required) ──────────────
+            # Canonical fields for the simplified v1 request. All idempotent so they are
+            # safe to run against older deployments. lat/lng stay nullable — area_id and
+            # location_text are the primary location inputs.
+            for col_sql in [
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS issue_type TEXT NOT NULL DEFAULT 'general'",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS area_id INTEGER",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS location_text TEXT",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS matched_mechanic_id INTEGER",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS matched_mechanic_name TEXT",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS matched_mechanic_phone TEXT",
+                "ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMP",
+            ]:
+                await conn.execute(col_sql)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_service_requests_driver_active "
+                "ON service_requests (user_id, created_at DESC) "
+                "WHERE status NOT IN ('completed', 'cancelled')"
+            )
+            logger.info("✅ v1 request model columns ensured")
 
             # Reviews and ratings table
             await conn.execute("""
@@ -827,9 +854,16 @@ def _media_rows_to_list(rows) -> list:
 
 class RequestCreate(BaseModel):
     customer_name: str = ""
-    service_type: str = "Roadside assist"
-    location: str = ""
-    description: str = ""
+    service_type: str
+    # v1 canonical fields (area-based, no GPS required)
+    issue_type: Optional[str] = None          # defaults to "general" when missing
+    description: Optional[str] = None
+    area_id: Optional[int] = None             # integer launch-area id (e.g. 15 = Ntinda)
+    location_text: Optional[str] = None       # human-readable place name / landmark
+    latitude: Optional[float] = None          # optional — not required for create
+    longitude: Optional[float] = None         # optional — not required for create
+    # legacy fields (kept for backward compatibility)
+    location: str = ""                        # legacy "lat,lng" string
     phone: str = ""
     preferred_mechanic_id: Optional[int] = None
 
@@ -838,12 +872,14 @@ class RequestOut(BaseModel):
     customer_name: str
     service_type: str
     location: str
-    description: str
+    description: Optional[str] = None
     # phone field EXCLUDED - never returned in normal responses
-    status: str = "pending"
+    status: str = "searching"
     media_files: Optional[List[MediaFile]] = None
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     user_id: Optional[int] = None
+    driver_id: Optional[int] = None
     mechanic_id: Optional[int] = None
     dispatched_at: Optional[str] = None
     accepted_at: Optional[str] = None
@@ -858,9 +894,54 @@ class RequestOut(BaseModel):
     completion_by: Optional[str] = None
     actual_fee: Optional[int] = None
     service_note: Optional[str] = None
+    # v1 canonical fields
+    issue_type: Optional[str] = None
+    area_id: Optional[int] = None
+    location_text: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    matched_mechanic_id: Optional[int] = None
+    matched_mechanic_name: Optional[str] = None
+    matched_mechanic_phone: Optional[str] = None
+    cancelled_at: Optional[str] = None
+    workflow_status: Optional[str] = None
 
 class CallPartnerResponse(BaseModel):
     phone: str  # Only returned from secure /call-partner endpoint
+
+
+def _canonical_driver_status(status: Optional[str]) -> str:
+    """Expose the v1 four-state request lifecycle to drivers while preserving provider workflow."""
+    value = (status or "searching").lower()
+    if value in ("pending", "searching"):
+        return "searching"
+    if value in ("completed", "cancelled"):
+        return value
+    return "assigned"
+
+
+def _request_response_data(row, *, driver_view: bool = False, media_files=None) -> dict:
+    data = dict(row)
+    workflow_status = data.get("status") or "searching"
+    data["id"] = str(data["id"])
+    data["driver_id"] = data.get("user_id")
+    data.pop("phone", None)
+    data["description"] = (data.get("description") or "").strip() or None
+    if driver_view:
+        data["workflow_status"] = workflow_status
+        data["status"] = _canonical_driver_status(workflow_status)
+        data["mechanic_name"] = data.get("matched_mechanic_name")
+    for key in (
+        "created_at", "updated_at", "dispatched_at", "accepted_at",
+        "en_route_at", "arrived_at", "service_started_at", "completed_at",
+        "cancelled_at",
+    ):
+        value = data.get(key)
+        if value is not None and not isinstance(value, str):
+            data[key] = value.isoformat()
+    if media_files is not None:
+        data["media_files"] = media_files
+    return data
 
 # ────────────────────────────── ENDPOINTS ──────────────────────────────
 
@@ -962,34 +1043,47 @@ async def _dispatch_to_matched_mechanics(
     notifications_url: str,
     job_data: dict,
     preferred_mechanic_id: Optional[int] = None,
+    area_id: Optional[int] = None,
 ) -> None:
     """
     Background task: call the matching service, get top-ranked mechanics,
     and send targeted FCM push to each one that has a registered FCM token.
     Falls back gracefully on any error — never blocks the main response.
+
+    v1: supports area-based matching — when there are no GPS coordinates we pass
+    `area_id` + `service_type` so matching works without the driver's location.
     """
     coords = _parse_latlong(location)
-    if not coords:
-        logger.debug("Matching skipped for request %s — location not parseable as lat,lng", request_id)
+    if not coords and area_id is None:
+        logger.info("Matching unavailable for request %s — no coordinates or area_id", request_id)
+        await manager.broadcast({
+            "type": "matching_empty",
+            "request_id": str(request_id),
+        })
         return
 
-    lat, lng = coords
     matching_url = os.getenv("MATCHING_SERVICE_URL", "http://127.0.0.1:8003").rstrip("/")
 
     try:
         token = _service_token()
+        match_body: dict = {
+            "request_id": request_id,
+            "service_type": service_type,
+            "preferred_mechanic_id": preferred_mechanic_id,
+            "top_n": 10,
+        }
+        if coords:
+            lat, lng = coords
+            match_body["latitude"] = lat
+            match_body["longitude"] = lng
+        if area_id is not None:
+            match_body["area_id"] = area_id
+
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.post(
                 f"{matching_url}/match",
                 headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "request_id": request_id,
-                    "latitude": lat,
-                    "longitude": lng,
-                    "service_type": service_type,
-                    "preferred_mechanic_id": preferred_mechanic_id,
-                    "top_n": 10,
-                },
+                json=match_body,
             )
             resp.raise_for_status()
             payload = resp.json()
@@ -1002,6 +1096,10 @@ async def _dispatch_to_matched_mechanics(
                 return
             if not candidates:
                 logger.info("Matching service found no eligible mechanics for request %s", request_id)
+                await manager.broadcast({
+                    "type": "matching_empty",
+                    "request_id": str(request_id),
+                })
                 return
             if not all(isinstance(candidate, dict) for candidate in candidates):
                 logger.warning(
@@ -1011,6 +1109,13 @@ async def _dispatch_to_matched_mechanics(
                 return
     except httpx.HTTPStatusError as exc:
         detail = exc.response.text[:300]
+        if exc.response.status_code == 404:
+            logger.info("Matching found no eligible mechanics for request %s: %s", request_id, detail)
+            await manager.broadcast({
+                "type": "matching_empty",
+                "request_id": str(request_id),
+            })
+            return
         logger.warning(
             "Matching service returned HTTP %s for request %s: %s",
             exc.response.status_code,
@@ -1034,7 +1139,7 @@ async def _dispatch_to_matched_mechanics(
                 json={
                     "device_tokens": mechanic_tokens,
                     "title": "New Job Available",
-                    "body": f"{service_type} — {location[:60]}",
+                    "body": f"{service_type} — {location[:60]}" if location else f"{service_type} — new request",
                     "data": {
                         "request_id": str(request_id),
                         "type": "new_job",
@@ -1105,70 +1210,125 @@ async def create_request(
     db=Depends(get_db),
 ):
     """
-    Create request with JSON payload (text only, no media).
-    For media files, use the FormData endpoint.
+    Create a request (v1) — area-based, no GPS required.
+
+    Required: service_type + (area_id OR location_text).
+    Optional: issue_type (defaults to "general"), description, latitude/longitude.
     """
-    print("📥 /requests hit")
     logger.info("🟢 POST /requests/ hit")
     try:
         customer_name = (payload.customer_name or "").strip() or "Driver"
-        service_type = (payload.service_type or "").strip() or "Roadside assist"
-        location = (payload.location or "").strip()
-        description = (payload.description or "").strip()
+
+        # Normalise service_type to the canonical v1 values: 'mechanic' | 'tow'.
+        raw_service = (payload.service_type or "").strip().lower()
+        if raw_service in ("tow", "towing", "towing_provider", "tow / recovery", "recovery", "garage transfer"):
+            service_type = "tow"
+        elif raw_service in ("mechanic", "repair", "roadside", "roadside assist", "both"):
+            service_type = "mechanic"
+        else:
+            raise HTTPException(status_code=400, detail="service_type must be 'mechanic' or 'tow'")
+
+        issue_type = (payload.issue_type or "").strip().lower() or "general"
+        description = (payload.description or "").strip() or None
+        area_id = payload.area_id
+        location_text = (payload.location_text or "").strip()
+        latitude = payload.latitude
+        longitude = payload.longitude
+        legacy_location = (payload.location or "").strip()
+
         # Always bind request to authenticated driver
-        if user.get("role") not in ("driver", "admin"):
+        role = (user.get("role") or "").lower()
+        if role not in ("driver", "admin"):
             raise HTTPException(status_code=403, detail="Only drivers can create requests")
         phone = (user.get("phone") or "").strip()
-        if not location:
-            raise HTTPException(status_code=400, detail="location is required")
-        if not phone:
-            raise HTTPException(status_code=400, detail="phone is required")
-        logger.info(f"   Payload received: customer_name={customer_name}, service_type={service_type}, phone={phone}")
-        
-        logger.info("📝 Before database insertion")
+        driver_id = int(user["id"]) if user.get("id") is not None else None
+        if role == "driver" and driver_id is None:
+            raise HTTPException(status_code=401, detail="Authenticated driver id is missing")
+
+        # v1 create rule: reject only if BOTH area_id and location_text are missing.
+        if area_id is None and not location_text:
+            raise HTTPException(status_code=400, detail="area_id or location_text is required")
+
+        # Keep the legacy display column populated without making it a location requirement.
+        location = location_text or legacy_location or (
+            f"{latitude},{longitude}" if latitude is not None and longitude is not None
+            else f"Area {area_id}" if area_id is not None
+            else ""
+        )
+
+        logger.info(f"   Payload received: service_type={service_type}, issue_type={issue_type}, area_id={area_id}, location_text={location_text}")
+
         query = """
-            INSERT INTO service_requests 
-            (customer_name, service_type, location, description, phone, status, user_id, dispatched_at)
-            VALUES ($1, $2, $3, $4, $5, 'pending', $6, NOW())
-            RETURNING id, customer_name, service_type, location, description, phone, status, created_at, user_id, mechanic_id,
-                      dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note
+            INSERT INTO service_requests
+            (customer_name, service_type, location, description, phone, status, user_id,
+             issue_type, area_id, location_text, latitude, longitude, dispatched_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7, $8, $9, $10, $11, NOW(), NOW())
+            RETURNING id, customer_name, service_type, location, description, phone, status, created_at, updated_at, user_id, mechanic_id,
+                      dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note,
+                      issue_type, area_id, location_text, latitude, longitude, matched_mechanic_id, matched_mechanic_name, matched_mechanic_phone, cancelled_at
         """
         try:
-            result = await db.fetchrow(
-                query,
-                customer_name,
-                service_type,
-                location,
-                description,
-                phone,
-                int(user.get("id")) if user.get("id") is not None else None,
-            )
+            async with db.transaction():
+                if role == "driver":
+                    lock_identity = f"phone:{phone}" if phone else f"id:{driver_id}"
+                    lock_key = f"driver-request:{lock_identity}"
+                    await db.execute("SELECT pg_advisory_xact_lock(hashtext($1))", lock_key)
+                    existing = await db.fetchrow(
+                        """
+                        SELECT id, customer_name, service_type, location, description, phone, status,
+                               created_at, updated_at, user_id, mechanic_id, dispatched_at, accepted_at,
+                               en_route_at, arrived_at, service_started_at, completed_at, eta_minutes,
+                               completion_by, actual_fee, service_note, issue_type, area_id, location_text,
+                               latitude, longitude, matched_mechanic_id, matched_mechanic_name,
+                               matched_mechanic_phone, cancelled_at
+                        FROM service_requests
+                        WHERE (($1::integer IS NOT NULL AND user_id = $1)
+                            OR ($2::text <> '' AND phone = $2))
+                          AND status NOT IN ('completed', 'cancelled')
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        FOR UPDATE
+                        """,
+                        driver_id,
+                        phone,
+                    )
+                    if existing:
+                        return _request_response_data(existing, driver_view=True, media_files=[])
+
+                result = await db.fetchrow(
+                    query,
+                    customer_name,
+                    service_type,
+                    location,
+                    description or "",
+                    phone,
+                    driver_id,
+                    issue_type,
+                    area_id,
+                    location_text or None,
+                    latitude,
+                    longitude,
+                )
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             logger.error(f"❌ Database INSERT failed: {type(e).__name__}: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-        
+
         if not result:
             logger.error("❌ Database returned no result after INSERT")
             raise HTTPException(status_code=500, detail="Failed to create request")
-        
-        request_data = dict(result)
-        request_data['id'] = str(request_data['id'])
-        if request_data.get('created_at'):
-            request_data['created_at'] = request_data['created_at'].isoformat()
-        for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
-            if request_data.get(k):
-                request_data[k] = request_data[k].isoformat()
-        request_data['media_files'] = []  # No media files for JSON-only requests
-        # Remove phone from response (never expose in normal API responses)
-        request_data.pop('phone', None)
-        
+
+        provider_request_data = _request_response_data(result, media_files=[])
+        request_data = _request_response_data(result, driver_view=True, media_files=[])
+
         logger.info(f"✅ Request created successfully: id={request_data['id']}")
         # Broadcast new job event to WebSocket clients (expires in 5 minutes)
         try:
             expires_at = datetime.utcnow() + timedelta(minutes=5)
             await manager.broadcast({
                 'type': 'new_job',
-                'job': request_data,
+                'job': provider_request_data,
                 'expires_at': expires_at.isoformat() + 'Z',
             })
         except Exception as e:
@@ -1182,12 +1342,13 @@ async def create_request(
             location,
             service_type,
             notifications_url,
-            request_data,
+            provider_request_data,
             payload.preferred_mechanic_id,
+            area_id,
         )
 
         return request_data
-        
+
     except HTTPException:
         # Re-raise HTTP exceptions (400, 500, etc.)
         raise
@@ -1349,7 +1510,7 @@ async def create_request_with_media(
     request_data.pop("phone", None)
     if request_data.get('created_at'):
         request_data['created_at'] = request_data['created_at'].isoformat()
-    for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
+    for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at", "cancelled_at"):
         if request_data.get(k):
             request_data[k] = request_data[k].isoformat()
     request_data["media_files"] = []
@@ -1422,14 +1583,19 @@ async def get_requests(
         # Normalise status: frontend sends 'in_progress' but DB uses multi-value statuses
         status_filter: Optional[list] = None
         if status and status != "all":
-            if status == "in_progress":
+            if status == "searching":
+                status_filter = ["pending"]
+            elif status == "assigned":
+                status_filter = ["accepted", "en_route", "arrived", "service_started", "awaiting_confirmation"]
+            elif status == "in_progress":
                 status_filter = ["en_route", "arrived", "service_started"]
             else:
                 status_filter = [status]
 
         query = """
-            SELECT id, customer_name, service_type, location, description, phone, status, created_at,
-                   user_id, mechanic_id, dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note
+            SELECT id, customer_name, service_type, location, description, phone, status, created_at, updated_at,
+                   user_id, mechanic_id, dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note,
+                   issue_type, area_id, location_text, latitude, longitude, matched_mechanic_id, matched_mechanic_name, matched_mechanic_phone, cancelled_at
             FROM service_requests
             WHERE
                 (
@@ -1460,15 +1626,7 @@ async def get_requests(
         
         requests_list = []
         for row in rows:
-            request_data = dict(row)
-            request_data["id"] = str(request_data["id"])
-            request_data.pop("phone", None)
-            if request_data.get("created_at"):
-                request_data["created_at"] = request_data["created_at"].isoformat()
-            for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
-                if request_data.get(k):
-                    request_data[k] = request_data[k].isoformat()
-            request_data["media_files"] = []
+            media_files = []
             try:
                 media_query = """
                     SELECT file_url as url, file_type, size_kb, uploaded_at
@@ -1477,7 +1635,7 @@ async def get_requests(
                     ORDER BY uploaded_at DESC
                 """
                 media_rows = await db.fetch(media_query, row["id"])
-                request_data["media_files"] = _media_rows_to_list(media_rows)
+                media_files = _media_rows_to_list(media_rows)
             except Exception as me:
                 logger.warning(f"Could not fetch media for request {row.get('id')}: {me}")
 
@@ -1496,7 +1654,7 @@ async def get_requests(
                     for c in chat_rows:
                         mt = (c["media_type"] or "").lower()
                         file_type = "photo" if mt in ("image", "photo") else ("voice" if mt in ("voice", "audio") else "document")
-                        request_data["media_files"].append({
+                        media_files.append({
                             "url": c["media_url"],
                             "file_type": file_type,
                             "size_kb": 0.0,
@@ -1505,7 +1663,11 @@ async def get_requests(
                 except Exception as ce:
                     logger.warning(f"Could not fetch chat media for request {row.get('id')}: {ce}")
 
-            requests_list.append(request_data)
+            requests_list.append(_request_response_data(
+                row,
+                driver_view=role == "driver",
+                media_files=media_files,
+            ))
         
         logger.info(f"📊 Fetched {len(requests_list)} requests")
         return requests_list
@@ -1537,7 +1699,7 @@ async def get_pending_requests(current_user: Dict = Depends(get_current_user), d
             data.pop("phone", None)
             if data.get("created_at"):
                 data["created_at"] = data["created_at"].isoformat()
-            for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
+            for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at", "cancelled_at"):
                 if data.get(k):
                     data[k] = data[k].isoformat()
             media_rows = await db.fetch(
@@ -1556,8 +1718,9 @@ async def get_pending_requests(current_user: Dict = Depends(get_current_user), d
 async def get_request(request_id: int, current_user: Dict = Depends(get_current_user), db=Depends(get_db)):
     """Get single request with media files"""
     query = """
-        SELECT id, customer_name, service_type, location, description, phone, status, created_at,
-               user_id, mechanic_id, dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note
+        SELECT id, customer_name, service_type, location, description, phone, status, created_at, updated_at,
+               user_id, mechanic_id, dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note,
+               issue_type, area_id, location_text, latitude, longitude, matched_mechanic_id, matched_mechanic_name, matched_mechanic_phone, cancelled_at
         FROM service_requests
         WHERE id = $1
     """
@@ -1578,16 +1741,6 @@ async def get_request(request_id: int, current_user: Dict = Depends(get_current_
         ):
             raise HTTPException(status_code=403, detail="Not allowed")
     
-    request_data = dict(result)
-    request_data['id'] = str(request_data['id'])
-    # Remove phone from response (never expose in normal API responses)
-    request_data.pop('phone', None)
-    if request_data.get('created_at'):
-        request_data['created_at'] = request_data['created_at'].isoformat()
-    for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
-        if request_data.get(k):
-            request_data[k] = request_data[k].isoformat()
-    
     # Fetch media files
     media_query = """
         SELECT file_url as url, file_type, size_kb, uploaded_at
@@ -1596,7 +1749,11 @@ async def get_request(request_id: int, current_user: Dict = Depends(get_current_
         ORDER BY uploaded_at DESC
     """
     media_rows = await db.fetch(media_query, request_id)
-    request_data['media_files'] = _media_rows_to_list(media_rows)
+    request_data = _request_response_data(
+        result,
+        driver_view=role == "driver",
+        media_files=_media_rows_to_list(media_rows),
+    )
 
     return request_data
 
@@ -1794,13 +1951,19 @@ async def accept_request(
                 UPDATE service_requests
                 SET status = 'accepted',
                     mechanic_id = $2,
-                    accepted_at = COALESCE(accepted_at, NOW())
+                    accepted_at = COALESCE(accepted_at, NOW()),
+                    matched_mechanic_id = $2,
+                    matched_mechanic_name = $3,
+                    matched_mechanic_phone = $4,
+                    updated_at = NOW()
                 WHERE id = $1 AND status = 'pending' AND mechanic_id IS NULL
                 RETURNING id, customer_name, service_type, location, description, phone, status, created_at,
                           user_id, mechanic_id, dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note
                 """,
                 request_id,
                 mechanic_id,
+                mechanic_name,
+                current_user.get("phone"),
             )
 
             if not result:
@@ -1831,7 +1994,7 @@ async def accept_request(
             request_data['id'] = str(request_data['id'])
             if request_data.get('created_at'):
                 request_data['created_at'] = request_data['created_at'].isoformat()
-            for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
+            for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at", "cancelled_at"):
                 if request_data.get(k):
                     request_data[k] = request_data[k].isoformat()
             request_data['media_files'] = []
@@ -1914,25 +2077,29 @@ async def reject_request(request_id: int, db=Depends(get_db)):
 @app.post("/requests/{request_id}/redispatch")
 async def redispatch_request(
     request_id: int,
+    background_tasks: BackgroundTasks,
     current_user: Dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    """Driver re-dispatches an existing pending request (e.g. no providers found).
-    Resets dispatched_at to NOW() and re-broadcasts new_job so mechanics get another chance.
-    """
+    """Driver retries matching for an existing searching request."""
     role = (current_user.get("role") or "driver").lower()
     user_id = current_user.get("id")
     user_phone = current_user.get("phone")
 
+    if role not in ("driver", "admin"):
+        raise HTTPException(status_code=403, detail="Only the request owner can retry matching")
+
     row = await db.fetchrow(
-        "SELECT id, status, user_id, phone FROM service_requests WHERE id = $1",
+        """SELECT id, status, user_id, phone, customer_name, service_type, location,
+                  description, area_id, location_text, latitude, longitude, issue_type
+           FROM service_requests WHERE id = $1""",
         request_id,
     )
     if not row:
         raise HTTPException(status_code=404, detail="Request not found")
     if row["status"] == "cancelled":
         raise HTTPException(status_code=400, detail="Cannot redispatch a cancelled request")
-    if row["status"] != "pending":
+    if row["status"] not in ("pending", "searching"):
         raise HTTPException(status_code=400, detail=f"Cannot redispatch a request with status '{row['status']}'")
 
     if role == "driver":
@@ -1946,34 +2113,40 @@ async def redispatch_request(
     result = await db.fetchrow(
         """
         UPDATE service_requests
-        SET dispatched_at = NOW()
+        SET dispatched_at = NOW(), updated_at = NOW()
         WHERE id = $1
-        RETURNING id, customer_name, service_type, location, description, status, created_at,
-                  user_id, mechanic_id, dispatched_at, accepted_at, en_route_at, arrived_at, service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note
+        RETURNING id, customer_name, service_type, location, description, status, created_at, updated_at,
+                  user_id, mechanic_id, dispatched_at, accepted_at, en_route_at, arrived_at,
+                  service_started_at, completed_at, eta_minutes, completion_by, actual_fee, service_note,
+                  issue_type, area_id, location_text, latitude, longitude, matched_mechanic_id,
+                  matched_mechanic_name, matched_mechanic_phone, cancelled_at
         """,
         request_id,
     )
 
-    request_data = dict(result)
-    request_data["id"] = str(request_data["id"])
-    request_data.pop("phone", None)
-    if request_data.get("created_at"):
-        request_data["created_at"] = request_data["created_at"].isoformat()
-    for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
-        if request_data.get(k):
-            request_data[k] = request_data[k].isoformat()
-    request_data["media_files"] = []
+    provider_request_data = _request_response_data(result, media_files=[])
+    request_data = _request_response_data(result, driver_view=role == "driver", media_files=[])
 
     expires_at = datetime.utcnow() + timedelta(minutes=5)
     try:
         await manager.broadcast({
             "type": "new_job",
-            "job": request_data,
+            "job": provider_request_data,
             "expires_at": expires_at.isoformat() + "Z",
         })
     except Exception as e:
         logger.warning(f"Failed to broadcast new_job on redispatch for request {request_id}: {e}")
 
+    background_tasks.add_task(
+        _dispatch_to_matched_mechanics,
+        request_id,
+        str(row.get("location_text") or row.get("location") or ""),
+        str(row["service_type"]),
+        os.getenv("NOTIFICATIONS_URL", "http://localhost:8004"),
+        provider_request_data,
+        None,
+        row.get("area_id"),
+    )
     logger.info(f"🔁 Request {request_id} re-dispatched — broadcast to {len(manager.active_connections)} clients")
     return JSONResponse({"status": "redispatched", "request": request_data})
 
@@ -2355,6 +2528,8 @@ async def update_status(
         ts_column = "completed_at"
     elif status == "accepted":
         ts_column = "accepted_at"
+    elif status == "cancelled":
+        ts_column = "cancelled_at"
 
     # Store the journey ETA when the mechanic starts driving — both apps derive the
     # shared arrival-time window from en_route_at + eta_minutes.
@@ -2380,13 +2555,13 @@ async def update_status(
 
     if ts_column:
         await db.execute(
-            f"UPDATE service_requests SET status = $1, {ts_column} = COALESCE({ts_column}, NOW()) WHERE id = $2",
+            f"UPDATE service_requests SET status = $1, {ts_column} = COALESCE({ts_column}, NOW()), updated_at = NOW() WHERE id = $2",
             status,
             request_id,
         )
     else:
         await db.execute(
-            "UPDATE service_requests SET status = $1 WHERE id = $2",
+            "UPDATE service_requests SET status = $1, updated_at = NOW() WHERE id = $2",
             status,
             request_id,
         )
@@ -2489,7 +2664,7 @@ async def update_status(
         payload["id"] = str(payload["id"])
         if payload.get("created_at"):
             payload["created_at"] = payload["created_at"].isoformat()
-        for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at"):
+        for k in ("dispatched_at", "accepted_at", "en_route_at", "arrived_at", "service_started_at", "completed_at", "cancelled_at"):
             if payload.get(k):
                 payload[k] = payload[k].isoformat()
         await manager.broadcast({

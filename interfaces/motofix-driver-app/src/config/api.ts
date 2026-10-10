@@ -211,10 +211,16 @@ export interface DocVerificationResult {
 // Requests API functions
 export const requestsService = {
   create: (data: {
-    customer_name: string;
-    service_type: string;
-    location: string;
-    description: string;
+    service_type: string;              // 'mechanic' | 'tow'
+    issue_type?: string;               // 'general' | 'flat_tyre' | 'battery' | 'fuel' | 'engine' | 'other'
+    description?: string | null;
+    area_id?: number | null;           // integer launch-area id (e.g. 15 = Ntinda)
+    location_text?: string | null;     // place name / landmark
+    latitude?: number | null;
+    longitude?: number | null;
+    // legacy (kept for backward compatibility)
+    customer_name?: string;
+    location?: string;
     preferred_mechanic_id?: number;
   }) => requestsApi.post('/requests/', data),
   
@@ -246,6 +252,112 @@ export const requestsService = {
   getReview: (requestId: string, direction = 'driver_to_mechanic') =>
     requestsApi.get(`/requests/${requestId}/review`, { params: { direction } }),
 };
+
+// ── Launch service areas (v1 area-based matching, no GPS required) ─────────────
+// Mirrors the verification service's KAMPALA_SERVICE_AREAS. A driver picks one of
+// these; mechanics are matched by their `service_area_ids` (integer ids).
+export interface ServiceArea { id: number; name: string; }
+export const SERVICE_AREAS: ServiceArea[] = [
+  { id: 1, name: 'Mpererwe' },
+  { id: 2, name: 'Komamboga' },
+  { id: 3, name: 'Kyanja' },
+  { id: 4, name: 'Kanyanya' },
+  { id: 5, name: 'Kikaya' },
+  { id: 6, name: 'Bukoto II' },
+  { id: 7, name: 'Kyambogo Upper' },
+  { id: 8, name: 'Kyambogo' },
+  { id: 9, name: 'UPK' },
+  { id: 10, name: 'Nabisunsa' },
+  { id: 11, name: 'Banda' },
+  { id: 12, name: 'Mutungo' },
+  { id: 13, name: 'Mbuya II' },
+  { id: 14, name: 'Mbuya I' },
+  { id: 15, name: 'Ntinda' },
+  { id: 16, name: 'Naguru II' },
+  { id: 17, name: 'Bugolobi' },
+  { id: 18, name: 'Kiswa' },
+  { id: 19, name: 'Nakawa' },
+  { id: 20, name: 'Naguru I' },
+  { id: 21, name: 'Luzira' },
+  { id: 22, name: 'Industrial Area' },
+  { id: 23, name: 'Luzira Prison' },
+  { id: 24, name: 'Butabika' },
+  { id: 25, name: 'Bukasa' },
+  { id: 26, name: 'Kansanga' },
+  { id: 27, name: 'Kisugu' },
+  { id: 28, name: 'Ggaba' },
+  { id: 29, name: 'Wabigalo' },
+  { id: 30, name: 'Kibuli' },
+  { id: 31, name: 'Kabalagala' },
+  { id: 32, name: 'Nsambya Police' },
+  { id: 33, name: 'Nsambya Railway' },
+  { id: 34, name: 'Kamwokya II' },
+  { id: 35, name: 'Kamwokya I' },
+  { id: 36, name: 'Bukoto I' },
+  { id: 37, name: 'Kyebando' },
+  { id: 38, name: 'Kawempe II' },
+  { id: 39, name: 'Mulago II' },
+  { id: 40, name: 'Buziga' },
+  { id: 41, name: 'Salaama' },
+  { id: 42, name: 'Mulago III' },
+  { id: 43, name: 'Mulago I' },
+  { id: 44, name: 'Makerere I' },
+  { id: 45, name: 'Kibuye I' },
+  { id: 46, name: 'Katwe I' },
+  { id: 47, name: 'Kisenyi II' },
+  { id: 48, name: 'Nakivubo' },
+  { id: 49, name: 'Old Kampala' },
+  { id: 50, name: 'Namirembe' },
+  { id: 51, name: 'Kasubi' },
+  { id: 52, name: 'Bwaise III' },
+  { id: 53, name: 'Busega' },
+  { id: 54, name: 'Kawempe I' },
+  { id: 55, name: 'Kazo' },
+  { id: 56, name: 'Bwaise II' },
+  { id: 57, name: 'Bwaise I' },
+  { id: 58, name: 'Makerere III' },
+  { id: 59, name: 'Makerere II' },
+  { id: 60, name: 'Makerere University' },
+  { id: 61, name: 'Mengo' },
+  { id: 62, name: 'Lungujja' },
+  { id: 63, name: 'Nateete' },
+  { id: 64, name: 'Mutundwe' },
+  { id: 65, name: 'Kabowa' },
+  { id: 66, name: 'Najjanankumbi II' },
+  { id: 67, name: 'Najjanankumbi I' },
+  { id: 68, name: 'Luwafu' },
+  { id: 69, name: 'Lukuli' },
+  { id: 70, name: 'Munyonyo / South Buziga' },
+  { id: 71, name: 'Makindye II' },
+  { id: 72, name: 'Makindye I' },
+  { id: 73, name: 'Busabala / Outer South Boundary' },
+  { id: 74, name: 'Ndeeba' },
+  { id: 75, name: 'Nakulabye' },
+  { id: 76, name: 'Muluka I' },
+  { id: 77, name: 'Muluka II' },
+  { id: 78, name: 'Kololo II' },
+  { id: 79, name: 'Katwe II' },
+  { id: 80, name: 'Wandegeya' },
+  { id: 81, name: 'Nakasero II' },
+  { id: 82, name: 'Nakasero I' },
+  { id: 83, name: 'Kololo I' },
+  { id: 84, name: 'Civic Centre' },
+  { id: 85, name: 'Nsambya Central' },
+  { id: 86, name: 'Kibuye II' },
+  { id: 87, name: 'Katwe III' },
+  { id: 88, name: 'Nsambya Estate' },
+  { id: 89, name: 'Nsambya Rail' },
+  { id: 90, name: 'Nsambya West' },
+  { id: 91, name: 'Muluka III' },
+  { id: 92, name: 'Nsambya Gogonya' },
+  { id: 93, name: 'Kagugube' },
+  { id: 94, name: 'Bukesa' },
+  { id: 95, name: 'Muluka IV' },
+  { id: 96, name: 'Nakasero III' },
+  { id: 97, name: 'Kyambogo / UPK Extension' },
+  { id: 98, name: 'Nsambya Area' },
+  { id: 99, name: 'Kisenyi III' },
+];
 
 // ── In-job chat (persisted, two-way) ─────────────────────────────────────────
 export interface JobChatMessage {

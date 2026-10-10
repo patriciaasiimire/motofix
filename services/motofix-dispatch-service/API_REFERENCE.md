@@ -1,4 +1,4 @@
-# 📖 API Reference - Media Files Support
+# 📖 API Reference - Requests
 
 ## Base URL
 
@@ -23,19 +23,22 @@ https://motofix-service-requests.onrender.com
 
 ## POST /requests/
 
-**Create a service request with text only (no media files).**
+**Create an area-based driver request without requiring GPS coordinates.**
 
 ### Request
 
 ```bash
 curl -X POST https://motofix-service-requests.onrender.com/requests/ \
+  -H "Authorization: Bearer <driver-access-token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "customer_name": "John Doe",
-    "phone": "+256700123456",
-    "location": "0.4500, 32.5800",
-    "description": "Flat tire on the left side",
-    "service_type": "Other"
+    "service_type": "mechanic",
+    "issue_type": "general",
+    "description": null,
+    "area_id": 15,
+    "location_text": "Ntinda",
+    "latitude": null,
+    "longitude": null
   }'
 ```
 
@@ -43,32 +46,51 @@ curl -X POST https://motofix-service-requests.onrender.com/requests/ \
 
 | Name | Type | Required | Example |
 |------|------|----------|---------|
-| `customer_name` | string | Yes | "John Doe" |
-| `phone` | string | Yes | "+256700123456" |
-| `location` | string | Yes | "0.4500, 32.5800" or "Kampala, Makerere" |
-| `description` | string | Yes | "Bike won't start" |
-| `service_type` | string | Yes | "Other" |
+| `service_type` | string | Yes | `"mechanic"` or `"tow"` |
+| `area_id` | integer | One of `area_id` or `location_text` | `15` (Ntinda) |
+| `location_text` | string or null | One of `area_id` or `location_text` | `"Near Ntinda market"` |
+| `issue_type` | string | No | `"general"` (default), `"flat_tyre"`, `"battery"`, `"fuel"`, `"engine"`, `"other"` |
+| `description` | string or null | No | `"Vehicle will not start"` |
+| `latitude` | number or null | No | `null` |
+| `longitude` | number or null | No | `null` |
 
-### Response (201 Created)
+The authenticated driver's ID is taken from the access token. Sending both location fields is allowed; GPS coordinates are optional.
+
+### Response (200 OK; relevant fields)
 
 ```json
 {
   "id": "1",
-  "customer_name": "John Doe",
-  "phone": "+256700123456",
-  "location": "0.4500, 32.5800",
-  "description": "Flat tire on the left side",
-  "service_type": "Other",
-  "status": "pending",
-  "created_at": "2026-01-27T10:30:00Z",
+  "driver_id": 42,
+  "status": "searching",
+  "workflow_status": "pending",
+  "service_type": "mechanic",
+  "issue_type": "general",
+  "description": null,
+  "location": "Ntinda",
+  "area_id": 15,
+  "location_text": "Ntinda",
+  "latitude": null,
+  "longitude": null,
+  "matched_mechanic_id": null,
+  "matched_mechanic_name": null,
+  "matched_mechanic_phone": null,
+  "created_at": "2026-10-10T10:30:00",
+  "updated_at": "2026-10-10T10:30:00",
   "media_files": []
 }
 ```
 
+The driver-facing `status` uses the v1 lifecycle; `workflow_status` preserves the
+provider workflow value for compatibility. Other nullable legacy lifecycle fields
+may also be present in the serialized response.
+
 ### Status Codes
 
-- `201` - Request created successfully
-- `400` - Invalid request data
+- `200` - Request created, or the driver's existing active request returned
+- `400` - Missing both `area_id` and `location_text`, or invalid service type
+- `401` - Driver identity missing from the token
+- `403` - Caller is not a driver
 - `500` - Server error
 
 ---

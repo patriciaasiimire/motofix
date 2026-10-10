@@ -28,7 +28,7 @@ from jose import JWTError, jwt
 
 load_dotenv()
 
-from .areas import AREA_INDEX, AREA_NAMES, resolve_area
+from .areas import AREA_INDEX, AREA_NAMES, resolve_area, SERVICE_AREA_MATCH_AREAS
 from .schemas import DispatchOutcome, MatchRequest, MatchResponse
 from .scoring import rank_launch_fallback, rank_mechanics
 
@@ -240,17 +240,41 @@ async def match_mechanics(
                 detail=f"Could not reach Mechanic Verification Service: {exc}",
             )
 
-    driver_area_id = body.area_id or resolve_area(body.latitude, body.longitude)
+    # Resolve the matching area id. The v1 flow passes an integer launch-area id
+    # (e.g. 15 = Ntinda) from the verification service; the matching service works
+    # with string area ids, so we convert integers via the launch-area mapping.
+    raw_area = body.area_id
+    if isinstance(raw_area, int):
+        mapped = SERVICE_AREA_MATCH_AREAS.get(raw_area)
+        driver_area_id = mapped[0] if mapped else None
+    elif isinstance(raw_area, str):
+        driver_area_id = raw_area
+    else:
+        driver_area_id = resolve_area(body.latitude, body.longitude)
+
     if driver_area_id is None:
         raise HTTPException(
             status_code=404,
-            detail="Your location is outside the current Motofix covered area. We only match mechanics serving launch areas like Ntinda, Nakawa, and Kampala Central.",
+            detail="We couldn't find mechanics for a covered area from this location. Please try a different area.",
         )
+
+    # When there are no GPS coordinates, use the area centroid as the effective
+    # request location so proximity scoring still works without a driver pin.
+    request_lat = body.latitude
+    request_lon = body.longitude
+    if (request_lat is None or request_lon is None) and driver_area_id:
+        area = AREA_INDEX.get(driver_area_id)
+        if area:
+            request_lat = float(area["center_lat"])
+            request_lon = float(area["center_lng"])
+        else:
+            request_lat = 0.0
+            request_lon = 0.0
 
     ranked = rank_mechanics(
         mechanics=mechanics,
-        request_lat=body.latitude,
-        request_lon=body.longitude,
+        request_lat=request_lat,
+        request_lon=request_lon,
         service_type=body.service_type,
         excluded_ids=excluded_ids,
         top_n=body.top_n or 5,
@@ -262,8 +286,8 @@ async def match_mechanics(
         if LAUNCH_MODE:
             ranked = rank_launch_fallback(
                 mechanics=mechanics,
-                request_lat=body.latitude,
-                request_lon=body.longitude,
+                request_lat=request_lat,
+                request_lon=request_lon,
                 excluded_ids=excluded_ids,
                 top_n=body.top_n or 5,
                 service_type=body.service_type,

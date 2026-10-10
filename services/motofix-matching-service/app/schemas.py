@@ -10,14 +10,14 @@
 #   DispatchOutcome   — report back whether a mechanic accepted/declined/expired
 
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 
 
 class MatchRequest(BaseModel):
     request_id: Optional[int] = Field(None, description="Service request ID (used for dispatch tracking and re-dispatch)")
-    latitude: float = Field(..., description="Breakdown latitude")
-    longitude: float = Field(..., description="Breakdown longitude")
-    service_type: str = Field(..., description="Type of service needed, e.g. 'tyre change', 'towing', 'engine repair'")
+    latitude: Optional[float] = Field(None, description="Breakdown latitude (optional for area-based matching)")
+    longitude: Optional[float] = Field(None, description="Breakdown longitude (optional for area-based matching)")
+    service_type: str = Field(..., description="Type of service needed: 'mechanic' | 'tow'")
     excluded_mechanic_ids: Optional[List[int]] = Field(
         default_factory=list,
         description="IDs of mechanics already tried for this request (manual override; DB history is also used automatically)",
@@ -27,7 +27,10 @@ class MatchRequest(BaseModel):
         description="Driver's saved helper; boosted only when verified, available, nearby, and capable for this job type.",
     )
     top_n: Optional[int] = Field(5, description="Maximum number of candidates to return", ge=1, le=20)
-    area_id: Optional[str] = Field(None, description="Optional resolved area id used for launch matching; server can resolve from GPS when absent.")
+    area_id: Optional[Union[int, str]] = Field(
+        None,
+        description="Launch-area id (integer verification-service id, e.g. 15 = Ntinda) or matching-service string id. Server resolves from GPS when absent.",
+    )
 
 
 class MechanicCandidate(BaseModel):

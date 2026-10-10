@@ -7,6 +7,7 @@ def test_kampala_launch_seed_has_stable_areas_and_unique_phones():
     phones = [phone for _, phone, _, _ in KAMPALA_LAUNCH_MECHANICS]
 
     assert len(KAMPALA_LAUNCH_MECHANICS) == 25
+    assert area_ids == set(range(1, 100))
     assert len(phones) == len(set(phones))
     assert {15, 19, 11, 16, 20, 22, 54, 38, 57, 56, 52, 75, 80, 60, 44, 61, 47, 51} <= area_ids
     assert all(set(mechanic_areas) <= area_ids for _, _, _, mechanic_areas in KAMPALA_LAUNCH_MECHANICS)

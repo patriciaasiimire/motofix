@@ -4,6 +4,7 @@
 // driver's order history). Big component because it covers browse → cart → order.
 
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import type { ElementType } from 'react'
 import {
   ArrowLeft, Search, X, ChevronDown, ShoppingBag, ShoppingCart,
@@ -560,7 +561,21 @@ export default function OrderPartsShop() {
 
       {/* Orders history */}
       {ordersOpen && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'var(--bg)', display: 'flex', flexDirection: 'column', maxWidth: 480, margin: '0 auto' }}>
+        createPortal(
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          bottom: 'calc(104px + env(safe-area-inset-bottom, 0px))',
+          left: '50%',
+          width: 'min(100%, 480px)',
+          transform: 'translateX(-50%)',
+          zIndex: 90,
+          background: 'var(--bg)',
+          display: 'flex',
+          flexDirection: 'column',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+        }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px', background: 'var(--header-bg)', borderBottom: '1px solid var(--border-2)', paddingTop: 'max(14px, env(safe-area-inset-top, 14px))' }}>
             <button onClick={() => setOrdersOpen(false)} style={{ width: 36, height: 36, borderRadius: 10, border: '1px solid var(--border-2)', cursor: 'pointer', background: 'var(--surface-2)', color: textHi, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ArrowLeft size={18} /></button>
             <div style={{ fontSize: 15, fontWeight: 800, color: textHi }}>My Orders</div>
@@ -574,7 +589,7 @@ export default function OrderPartsShop() {
               <div style={{ fontSize: 12.5, color: textLo }}>Parts you order will appear here.</div>
             </div>
           ) : (
-            <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', padding: 16, paddingBottom: 'max(16px, env(safe-area-inset-bottom, 16px))', display: 'flex', flexDirection: 'column', gap: 12 }}>
               {orders.map(o => (
                 <div key={o.id} style={{ background: surface, borderRadius: 14, padding: 14, border }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
@@ -589,7 +604,9 @@ export default function OrderPartsShop() {
               ))}
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
+        )
       )}
     </div>
   )

@@ -5,7 +5,13 @@ os.environ.setdefault("SECRET_KEY", "matching-test-secret")
 from fastapi.testclient import TestClient
 
 import app.main as matching_main
+from app.areas import SERVICE_AREA_MATCH_AREAS
 from app.scoring import MAX_DISTANCE_KM, rank_mechanics, rank_launch_fallback
+
+
+def test_every_kampala_service_area_has_a_matching_region():
+    assert set(SERVICE_AREA_MATCH_AREAS) == set(range(1, 100))
+    assert all(SERVICE_AREA_MATCH_AREAS[area_id] for area_id in range(1, 100))
 
 
 class FakeResponse:

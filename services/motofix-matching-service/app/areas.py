@@ -148,27 +148,26 @@ AREA_INDEX = {area["id"]: area for area in AREA_CATALOG}
 AREA_NAMES = {area["id"]: area["name"] for area in AREA_CATALOG}
 AREA_IDS = {area["id"] for area in AREA_CATALOG}
 
-# Verification-service launch area IDs mapped to the matching service's broader
-# launch regions. These are service-area memberships, not mechanic GPS coordinates.
+# Kampala service-area IDs mapped to the matching service's established regions.
+# Mechanic memberships and driver-selected area IDs both use this mapping, keeping
+# area membership as the primary gate without requiring either party's GPS pin.
+_SERVICE_AREA_REGION_GROUPS = {
+    "ntinda": (3, 6, 15, 16, 20, 34, 35, 36, 37, 78, 83),
+    "nakawa": (7, 8, 9, 10, 11, 12, 13, 14, 17, 18, 19, 21, 22, 23, 24, 25, 97),
+    "kawempe": (1, 2, 4, 5, 38, 51, 52, 54, 55, 56, 57),
+    "bwaise": (38, 51, 52, 53, 54, 55, 56, 57),
+    "makerere": (39, 44, 49, 50, 58, 59, 60, 74, 75, 76, 77, 93, 94),
+    "wandegeya": (34, 35, 36, 37, 39, 42, 43, 44, 49, 50, 58, 59, 60, 74, 75, 76, 77, 80, 93, 94),
+    "mengo": (26, 27, 28, 29, 30, 31, 32, 33, 40, 41, 45, 46, 47, 48, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 79, 85, 86, 87, 88, 89, 90, 91, 92, 98, 99),
+    "kampala_central": (22, 26, 27, 29, 30, 31, 32, 33, 40, 41, 45, 46, 47, 48, 49, 61, 71, 72, 78, 79, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 95, 96, 98, 99),
+}
+
 SERVICE_AREA_MATCH_AREAS = {
-    15: ("ntinda",),
-    19: ("nakawa",),
-    11: ("nakawa",),
-    16: ("ntinda",),
-    20: ("ntinda",),
-    22: ("nakawa", "kampala_central"),
-    54: ("kawempe",),
-    38: ("kawempe",),
-    57: ("bwaise",),
-    56: ("bwaise",),
-    52: ("bwaise",),
-    75: ("makerere", "wandegeya"),
-    80: ("wandegeya",),
-    60: ("makerere",),
-    44: ("makerere",),
-    61: ("mengo",),
-    47: ("mengo", "kampala_central"),
-    51: ("bwaise", "kawempe"),
+    area_id: tuple(
+        region for region, area_ids in _SERVICE_AREA_REGION_GROUPS.items()
+        if area_id in area_ids
+    )
+    for area_id in range(1, 100)
 }
 
 

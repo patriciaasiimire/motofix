@@ -1,9 +1,7 @@
-// BottomNav.tsx — the fixed navigation bar at the bottom of the main screens
-// (Home, request help, history, profile). Highlights the tab matching the current
-// page. App.tsx decides when to show it (hidden on login/flow/detail screens).
+// BottomNav.tsx — fixed navigation for authenticated driver screens.
 
 import { Link, useLocation } from 'react-router-dom';
-import { Home, History, User, PlusCircle } from 'lucide-react';
+import { Home, History, PlusCircle } from 'lucide-react';
 
 const ITEMS = [
   {
@@ -13,22 +11,16 @@ const ITEMS = [
     matchPaths: ['/requests'],
   },
   {
-    path: '/sos',
+    path: '/get-help',
     icon: PlusCircle,
-    label: 'Request',
-    matchPaths: ['/sos', '/fault-chat', '/locating', '/nearby-mechanics', '/describe-issue'],
+    label: 'Get Help',
+    matchPaths: ['/get-help', '/get-help/location', '/sos', '/fault-chat', '/locating', '/nearby-mechanics', '/describe-issue'],
   },
   {
     path: '/history',
     icon: History,
     label: 'History',
     matchPaths: ['/history'],
-  },
-  {
-    path: '/profile',
-    icon: User,
-    label: 'Profile',
-    matchPaths: ['/profile', '/settings'],
   },
 ];
 
@@ -57,9 +49,11 @@ export function BottomNav() {
 
       <nav style={{
         position: 'fixed',
-        bottom: 'calc(env(safe-area-inset-bottom, 0px) + 16px)',
-        left: 20,
-        right: 20,
+        bottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)',
+        left: '50%',
+        right: 'auto',
+        width: 'min(480px, calc(100% - 24px))',
+        transform: 'translateX(-50%)',
         zIndex: 50,
         borderRadius: 9999,
         background: 'var(--nav-bg)',

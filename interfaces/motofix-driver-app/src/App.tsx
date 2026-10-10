@@ -10,8 +10,8 @@
 //        driver's active/past requests). So a page can read requests, which can
 //        react to WebSocket events, which respect the theme.
 //
-// New screen? Add its page import, then a <Route> here. If it shouldn't show the
-// bottom nav bar, also add its path to `hideNavRoutes`.
+// New screen? Add its page import, then a <Route> here. The bottom nav is shown
+// consistently on authenticated screens and omitted from public/auth screens.
 
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -42,6 +42,8 @@ import RequestDetail from "./pages/RequestDetail";
 import LocatingUser from "./pages/LocatingUser";
 import DescribeIssue from "./pages/DescribeIssue";
 import FaultChat from "./pages/FaultChat";
+import GetHelp from "./pages/GetHelp";
+import GetHelpLocation from "./pages/GetHelpLocation";
 import NearbyMechanics from "./pages/NearbyMechanics";
 import SOSFaultPicker from "./pages/SOSFaultPicker";
 import EmergencyAlert from "./pages/EmergencyAlert";
@@ -75,13 +77,18 @@ function AppContent() {
   // completed or cancelled (the post-completion rating modal fires on its own).
   const jobInProgress = requests.some((r) => r.status !== 'completed' && r.status !== 'cancelled');
   useReminderScheduler(isAuthenticated && !onPublicScreen && !jobInProgress);
-  const hideNavRoutes = ['/login', '/signup', '/welcome', '/driver-entry', '/', '/onboarding', '/verifying', '/reminders', '/reminder-settings', '/notifications', '/locating', '/describe-issue', '/fault-chat', '/diagnose', '/nearby-mechanics', '/emergency', '/insurance', '/terms-of-service', '/privacy-policy', '/rate-motofix', '/contact-support', '/spare-parts', '/parts-needed', '/parts-orders'];
-  const showBottomNav = !hideNavRoutes.includes(location.pathname) && !location.pathname.startsWith('/requests/');
+  const publicNavExcludedRoutes = ['/', '/welcome', '/driver-entry', '/login', '/signup', '/verifying'];
+  const showBottomNav = isAuthenticated && !publicNavExcludedRoutes.includes(location.pathname);
 
   return (
     <>
       <NetworkBanner />
       {/* QuoteModal retired — replaced by the in-job FinalPaymentFlow (see RequestDetail). */}
+      <div
+        style={{
+          paddingBottom: showBottomNav ? 'calc(112px + env(safe-area-inset-bottom, 0px))' : undefined,
+        }}
+      >
       <Routes>
         <Route path="/" element={<Splash />} />
         <Route path="/welcome" element={<Welcome />} />
@@ -142,6 +149,22 @@ function AppContent() {
           element={
             <PrivateRoute>
               <SOSFaultPicker />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/get-help"
+          element={
+            <PrivateRoute>
+              <GetHelp />
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path="/get-help/location"
+          element={
+            <PrivateRoute>
+              <GetHelpLocation />
             </PrivateRoute>
           }
         />
@@ -285,6 +308,7 @@ function AppContent() {
         />
         <Route path="*" element={<NotFound />} />
       </Routes>
+      </div>
       {showBottomNav && <BottomNav />}
       {MOTOBOT_ENABLED && showBottomNav && isAuthenticated && <MotobotFab />}
     </>

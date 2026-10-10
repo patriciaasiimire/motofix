@@ -21,6 +21,7 @@ import { toast } from "sonner";
 const AMBER = "#F59E0B";
 const AMBER_D = "#D97706";
 const AMBER_GRAD = `linear-gradient(135deg, ${AMBER}, ${AMBER_D})`;
+const DRIVER_NAV_CLEARANCE = "calc(104px + env(safe-area-inset-bottom, 0px))";
 
 const driverLeafletIcon = divIcon({
   className: "",
@@ -449,8 +450,8 @@ export default function SparePartsDealer() {
   // ════════ PROCESSING — full-screen scanner ════════
   if (stage === "processing") {
     return (
-      <div style={{ position: "fixed", inset: 0, overflow: "hidden", background: pageBg, display: "flex", flexDirection: "column" }}>
-        <div style={{ position: "relative", zIndex: 5, flexShrink: 0, display: "flex", alignItems: "center", gap: 12, padding: "14px 16px" }}>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: DRIVER_NAV_CLEARANCE, overflow: "hidden", background: pageBg, display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
+        <div style={{ position: "relative", zIndex: 5, flexShrink: 0, display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", paddingTop: "max(14px, env(safe-area-inset-top, 14px))" }}>
           <button onClick={() => setStage("questions")} style={{ width: 36, height: 36, borderRadius: 10, border: "none", cursor: "pointer", background: surface, color: textHi, boxShadow: "0 2px 8px rgba(0,0,0,0.08)", display: "flex", alignItems: "center", justifyContent: "center" }}>
             <ArrowLeft size={18} />
           </button>
@@ -491,7 +492,7 @@ export default function SparePartsDealer() {
       { id: "parts", label: "Order Parts", Icon: ShoppingBag },
     ];
     return (
-      <div style={{ position: "fixed", inset: 0, background: pageBg, display: "flex", flexDirection: "column", maxWidth: 480, margin: "0 auto" }}>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: DRIVER_NAV_CLEARANCE, width: "min(100%, 480px)", margin: "0 auto", background: pageBg, display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: "var(--header-bg)", borderBottom: `1px solid ${border}`, flexShrink: 0, paddingTop: "max(14px, env(safe-area-inset-top, 14px))" }}>
           <button onClick={() => navigate(-1)} style={{ width: 38, height: 38, borderRadius: 12, flexShrink: 0, background: surface2, border: `1px solid ${border}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
@@ -524,7 +525,7 @@ export default function SparePartsDealer() {
           })}
         </div>
         {/* Content */}
-        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", WebkitOverflowScrolling: "touch" }}>
           {tab === "selffix" && <SelfFixGuides />}
           {tab === "parts" && <OrderPartsShop />}
         </div>
@@ -537,8 +538,8 @@ export default function SparePartsDealer() {
   if (stage === "cart") {
     const canPay = !!carModel.trim() && cartTotal > 0;
     return (
-      <div style={{ position: "fixed", inset: 0, background: pageBg, display: "flex", flexDirection: "column" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", flexShrink: 0, background: surface, borderBottom: `1px solid ${border}` }}>
+      <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: DRIVER_NAV_CLEARANCE, background: pageBg, display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", paddingTop: "max(12px, env(safe-area-inset-top, 12px))", flexShrink: 0, background: surface, borderBottom: `1px solid ${border}` }}>
           <button onClick={() => { setQIndex(QUESTIONS.length - 1); setStage("questions"); }} style={{ width: 36, height: 36, borderRadius: 10, border: "none", cursor: "pointer", background: surface2, color: textHi, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <ArrowLeft size={18} />
           </button>
@@ -572,7 +573,7 @@ export default function SparePartsDealer() {
             {priced.map((p, i) => {
               const u = unitPrice(p);
               return (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 12, marginBottom: 12, borderBottom: i < priced.length - 1 ? `1px solid ${border}` : "none" }}>
+                <div key={i} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, paddingBottom: 12, marginBottom: 12, borderBottom: i < priced.length - 1 ? `1px solid ${border}` : "none" }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 700, color: textHi }}>{p.name}</div>
                     <div style={{ fontSize: 11.5, color: textLo, marginTop: 2 }}>{u ? `${fmtUGX(u)} each` : "Price on request"}</div>
@@ -617,7 +618,7 @@ export default function SparePartsDealer() {
 
         {payOpen && (
           <div style={{ position: "absolute", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-end" }} onClick={() => payState === "idle" && setPayOpen(false)}>
-            <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", background: surface, borderRadius: "22px 22px 0 0", padding: 20, boxShadow: "0 -16px 56px rgba(0,0,0,0.32)" }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ width: "100%", maxHeight: "calc(100dvh - 120px - env(safe-area-inset-bottom, 0px))", overflowY: "auto", overscrollBehavior: "contain", boxSizing: "border-box", background: surface, borderRadius: "22px 22px 0 0", padding: 20, paddingBottom: "max(20px, env(safe-area-inset-bottom, 20px))", boxShadow: "0 -16px 56px rgba(0,0,0,0.32)" }}>
               {payState === "done" ? (
                 <div style={{ textAlign: "center", padding: "8px 0" }}>
                   <div style={{ width: 56, height: 56, borderRadius: "50%", background: "rgba(16,185,129,0.14)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
@@ -655,8 +656,8 @@ export default function SparePartsDealer() {
 
   // ════════ RESULTS ════════
   return (
-    <div style={{ position: "fixed", inset: 0, background: pageBg, display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", flexShrink: 0, background: surface, borderBottom: `1px solid ${border}` }}>
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: DRIVER_NAV_CLEARANCE, background: pageBg, display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", paddingTop: "max(12px, env(safe-area-inset-top, 12px))", flexShrink: 0, background: surface, borderBottom: `1px solid ${border}` }}>
         <button onClick={() => navigate(-1)} style={{ width: 36, height: 36, borderRadius: 10, border: "none", cursor: "pointer", background: surface2, color: textHi, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <ArrowLeft size={18} />
         </button>
@@ -675,7 +676,7 @@ export default function SparePartsDealer() {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-        <div className="sp-map" style={{ position: "relative", height: "clamp(340px,54vh,540px)", borderRadius: 16, overflow: "hidden", border: `1px solid ${border}`, marginBottom: 16 }}>
+        <div className="sp-map" style={{ position: "relative", height: "clamp(240px,42dvh,540px)", borderRadius: 16, overflow: "hidden", border: `1px solid ${border}`, marginBottom: 16 }}>
           <style>{LEAFLET_BASE_CSS}</style>
           <MapContainer
             center={coords ?? KAMPALA}
@@ -755,7 +756,7 @@ export default function SparePartsDealer() {
       </div>
 
       {selected && (
-        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 45, background: surface, borderRadius: "24px 24px 0 0", maxHeight: "92vh", overflowY: "auto", boxShadow: "0 -16px 56px rgba(0,0,0,0.32)" }}>
+        <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 45, background: surface, borderRadius: "24px 24px 0 0", maxHeight: "calc(100dvh - 120px - env(safe-area-inset-bottom, 0px))", overflowY: "auto", overscrollBehavior: "contain", boxShadow: "0 -16px 56px rgba(0,0,0,0.32)" }}>
           <div style={{ position: "relative", height: 188, overflow: "hidden", borderRadius: "24px 24px 0 0" }}>
             <img
               src={imgsOf(selected)[heroIdx] ?? selected.art[0]}
@@ -890,7 +891,7 @@ export default function SparePartsDealer() {
 
       {routeTo && (
         <div style={{ position: "absolute", inset: 0, zIndex: 60, background: pageBg, display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", flexShrink: 0, background: surface, borderBottom: `1px solid ${border}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", paddingTop: "max(12px, env(safe-area-inset-top, 12px))", flexShrink: 0, background: surface, borderBottom: `1px solid ${border}` }}>
             <button onClick={closeDirections} style={{ width: 36, height: 36, borderRadius: 10, border: "none", cursor: "pointer", background: surface2, color: textHi, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <ArrowLeft size={18} />
             </button>
@@ -960,7 +961,7 @@ export default function SparePartsDealer() {
 
       {ordersOpen && (
         <div style={{ position: "absolute", inset: 0, zIndex: 50, background: pageBg, display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: surface, borderBottom: `1px solid ${border}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", paddingTop: "max(14px, env(safe-area-inset-top, 14px))", background: surface, borderBottom: `1px solid ${border}` }}>
             <button onClick={() => setOrdersOpen(false)} style={{ width: 36, height: 36, borderRadius: 10, border: "none", cursor: "pointer", background: surface2, color: textHi, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <ArrowLeft size={18} />
             </button>

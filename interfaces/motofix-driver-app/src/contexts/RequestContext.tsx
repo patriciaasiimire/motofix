@@ -50,7 +50,10 @@ export interface Request {
   description: string;
   status: string;
   created_at?: string;
+  updated_at?: string;
   user_id?: number;
+  driver_id?: number;
+  workflow_status?: string;
   mechanic_id?: number | string;
   mechanic_name?: string;
   mechanic_lat?: number;
@@ -65,6 +68,17 @@ export interface Request {
   completion_by?: 'mechanic' | 'driver' | 'system' | null;
   actual_fee?: number | null;       // final charge the mechanic entered
   service_note?: string | null;     // what was fixed (the ticked AI fixes, joined)
+  // v1 canonical fields
+  issue_type?: string | null;
+  area_id?: number | null;
+  location_text?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  matched_mechanic_id?: number | null;
+  matched_mechanic_name?: string | null;
+  matched_mechanic_phone?: string | null;
+  matched_mechanic_phone?: string | null;
+  cancelled_at?: string | null;
 }
 
 interface RequestContextValue {
@@ -87,6 +101,8 @@ interface RequestContextValue {
 const RequestContext = createContext<RequestContextValue | null>(null);
 
 const STATUS_MESSAGES: Record<string, string> = {
+  searching: '🔍 We are looking for a verified provider for your request',
+  assigned: '🔧 A provider has accepted your request!',
   accepted: '🔧 A mechanic has accepted your request!',
   en_route: '🚗 Your mechanic is on the way!',
   arrived: '📍 Your mechanic has arrived!',
@@ -97,6 +113,12 @@ const STATUS_MESSAGES: Record<string, string> = {
   // app an external cancel means the mechanic pulled out, so we name them.
   cancelled: '❌ Your mechanic cancelled this request',
 };
+
+function canonicalStatus(status: string): string {
+  if (status === 'pending' || status === 'searching') return 'searching';
+  if (status === 'completed' || status === 'cancelled') return status;
+  return 'assigned';
+}
 
 export function RequestProvider({ children }: { children: React.ReactNode }) {
   const [requests, setRequests] = useState<Request[]>([]);
@@ -126,7 +148,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
   const markCancelled = useCallback((id: string) => {
     localCancelledRef.current.add(id);
     setRequests(prev =>
-      prev.map(r => String(r.id) === id ? { ...r, status: 'cancelled' } : r)
+      prev.map(r => String(r.id) === id ? { ...r, status: 'cancelled', workflow_status: 'cancelled' } : r)
     );
     previousStatusesRef.current.set(id, 'cancelled');
   }, []);
@@ -143,7 +165,13 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       // Build a lookup of current WS-sourced mechanic positions
       const mechPos = new Map(prev.map(r => [String(r.id), { lat: r.mechanic_lat, lon: r.mechanic_lon }]));
 
-      const result = incoming.map(r => {
+      const result = incoming.map((source) => {
+        const workflowStatus = source.workflow_status ?? source.status;
+        let r: Request = {
+          ...source,
+          workflow_status: workflowStatus,
+          status: canonicalStatus(workflowStatus),
+        };
         const id = String(r.id);
         // If we optimistically cancelled a request, don't let a stale server
         // response (arriving via WS-triggered fetchAll) revert it back to active.
@@ -151,7 +179,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
           if (r.status === 'cancelled') {
             localCancelledRef.current.delete(id); // server confirmed — clean up
           } else {
-            r = { ...r, status: 'cancelled' }; // force cancelled until server confirms
+            r = { ...r, status: 'cancelled', workflow_status: 'cancelled' }; // force cancelled until server confirms
           }
         }
         // Preserve live mechanic position from WS state — the REST API snapshot
@@ -260,6 +288,13 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
+        if (payload.type === 'matching_empty') {
+          window.dispatchEvent(new CustomEvent('motofix:matching-empty', {
+            detail: { request_id: String(payload.request_id ?? '') },
+          }));
+          return;
+        }
+
         // Handle status-change events pushed by the backend
         if (payload.type === 'status_update' || payload.type === 'job_taken') {
           // Optimistically update the matching request in state
@@ -275,9 +310,11 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
               // fields) from it so the driver sees the AGREED figure live, before
               // confirming the job is done.
               const snap = (payload.request as Record<string, unknown> | undefined);
+              const workflowStatus = String(payload.status ?? r.workflow_status ?? r.status);
               const updated: Request = {
                 ...r,
-                status: (payload.status as string) ?? r.status,
+                workflow_status: workflowStatus,
+                status: canonicalStatus(workflowStatus),
                 mechanic_id: (payload.mechanic_id as string) ?? r.mechanic_id,
                 mechanic_name: (payload.mechanic_name as string) ?? r.mechanic_name,
                 mechanic_lat: (payload.mechanic_lat as number) ?? r.mechanic_lat,

@@ -127,6 +127,7 @@ export default function RequestsList() {
     });
   };
 
+  const activeRequests  = requests.filter(r => !['completed', 'cancelled'].includes(r.status));
   const historyRequests = requests.filter(r => ['completed', 'cancelled'].includes(r.status));
   const completed = historyRequests.filter(r => r.status === 'completed').length;
   const cancelled  = historyRequests.filter(r => r.status === 'cancelled').length;
@@ -178,6 +179,20 @@ export default function RequestsList() {
             <RefreshCw style={{ width: 15, height: 15, animation: (isLoading || refreshing) ? 'rl-spin 0.8s linear infinite' : 'none' }} />
           </button>
         </div>
+
+        {/* ── Active requests — at the top ── */}
+        {!isLoading && activeRequests.length > 0 && (
+          <div style={{ marginBottom: 24 }}>
+            <p style={{ color: 'var(--text-dim)', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.18em', fontWeight: 700, marginBottom: 12 }}>
+              Active
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {activeRequests.map((request, index) => (
+                <RequestCard key={request.id} request={request} index={index} />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── Stats row ── */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 24 }}>
