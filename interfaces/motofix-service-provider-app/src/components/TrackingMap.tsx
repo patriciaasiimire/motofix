@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import L from 'leaflet'
-import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet'
+import { MapContainer, Marker, Polyline, Popup, useMap } from 'react-leaflet'
+import OpenFreeMapLayer from '@/components/OpenFreeMapLayer'
 import { Maximize2, Minimize2 } from 'lucide-react'
 import { useJobSim } from '@/hooks/useJobSim'
 
@@ -52,10 +53,7 @@ function MapView({
         scrollWheelZoom
         style={{ width: '100%', height: '100%' }}
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <OpenFreeMapLayer />
         <FitMap points={points} />
         {route && route.length > 1 && (
           <Polyline positions={route.map(point => [point.lat, point.lng])} pathOptions={{ color: '#F59E0B', weight: 6, opacity: 0.9 }} />

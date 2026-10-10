@@ -1,7 +1,8 @@
 // Highlights areas with the most breakdowns on an OpenStreetMap basemap.
 
 import { useState } from 'react';
-import { CircleMarker, MapContainer, Popup, TileLayer, useMapEvents } from 'react-leaflet';
+import { CircleMarker, MapContainer, Popup, useMapEvents } from 'react-leaflet';
+import OpenFreeMapLayer from '@/components/OpenFreeMapLayer';
 import { Flame, MapPin, Activity, X, TrendingUp } from 'lucide-react';
 
 const C = {
@@ -138,10 +139,7 @@ export function BreakdownHotspotMap() {
             scrollWheelZoom={false}
             style={{ height: '100%', width: '100%' }}
           >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
+            <OpenFreeMapLayer />
             <MapClickHandler onMapClick={() => setSelected(null)} />
             {HOTSPOTS.map(spot => {
               const isActive = selected?.id === spot.id;

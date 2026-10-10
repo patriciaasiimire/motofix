@@ -5,7 +5,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties, type ReactNode, type MutableRefObject } from 'react';
 import { type LL } from '@/utils/routeFollow';
 import { createPortal } from 'react-dom';
-import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, Popup, useMap } from 'react-leaflet';
+import OpenFreeMapLayer from '@/components/OpenFreeMapLayer';
 import { Icon, type Map as LeafletMap } from 'leaflet';
 import {
   X, XCircle, ChevronRight, AlertTriangle, CheckCircle2,
@@ -1251,10 +1252,7 @@ export default function OutOfFuelFlow({ onClose }: Props) {
                         center={driverPos ?? KAMPALA}
                         points={driverPos ? [driverPos, ...stations.map(s => ({ lat: s.lat, lng: s.lng }))] : undefined}
                       />
-                      <TileLayer
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                      />
+                      <OpenFreeMapLayer />
                       {driverPos && (
                         <Marker
                           position={driverPos}
@@ -1743,10 +1741,7 @@ function StationProfileModal({ station, driverPos, onClose }: {
         <style>{LEAFLET_BASE_CSS}</style>
         <MapContainer center={driverPos ?? dest ?? KAMPALA} zoom={15} style={{ width: '100%', height: '100%' }} zoomControl={false}>
           <MapViewport mapRef={mapRef} center={driverPos ?? dest ?? KAMPALA} points={directions ?? undefined} zoom={15} />
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+          <OpenFreeMapLayer />
           {driverPos && (
             <Marker position={driverPos} icon={new Icon({ iconUrl: pin('#3B82F6'), iconSize: [34, 43], iconAnchor: [17, 42] })}>
               <Popup>Your location</Popup>

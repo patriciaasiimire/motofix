@@ -5,7 +5,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import L, { type Map as LeafletMap } from 'leaflet';
-import { MapContainer, TileLayer, Marker, Circle, Polyline, Popup, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Circle, Polyline, Popup, useMap } from 'react-leaflet';
+import OpenFreeMapLayer from '@/components/OpenFreeMapLayer';
 import {
   ArrowLeft, Phone, Star, Navigation, X,
   Shield, Clock, Zap, MapPin, CheckCircle2,
@@ -979,10 +980,7 @@ export default function NearbyMechanics() {
         style={{ width: '100%', height: '100%' }}
       >
         <MapController mapRef={mapRef} zoom={mapZoom} />
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <OpenFreeMapLayer />
 
         {/* Beacon pulse — always visible */}
         <Circle center={[driverPos.lat, driverPos.lng]} radius={beaconOuter} pathOptions={{ color: R, opacity: 0.22, weight: 1.5, fillColor: R, fillOpacity: 0.05 }} interactive={false} />

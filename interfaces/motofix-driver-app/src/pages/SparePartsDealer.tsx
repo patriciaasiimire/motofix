@@ -7,7 +7,8 @@ import type { ElementType } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import SelfFixGuides from "@/components/SelfFixGuides";
 import OrderPartsShop from "@/components/OrderPartsShop";
-import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, Marker, Polyline, Popup, useMap } from "react-leaflet";
+import OpenFreeMapLayer from "@/components/OpenFreeMapLayer";
 import { divIcon, type Map as LeafletMap } from "leaflet";
 import { ArrowLeft, Phone, Star, MapPin, X, Navigation, ShoppingBag, Loader2, ChevronRight, MessageCircle, ReceiptText, Clock, Store, Plus, Check, Wrench, Bot, Truck } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -683,10 +684,7 @@ export default function SparePartsDealer() {
             scrollWheelZoom
           >
             <MapViewport mapRef={mapRef} center={coords ?? KAMPALA} points={dealerMapPoints} />
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
+            <OpenFreeMapLayer />
             {coords && (
               <Marker position={coords} icon={driverLeafletIcon}>
                 <Popup>Your location</Popup>
@@ -914,10 +912,7 @@ export default function SparePartsDealer() {
                 center={coords ?? { lat: routeTo.lat, lng: routeTo.lng }}
                 points={directions ?? undefined}
               />
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
+              <OpenFreeMapLayer />
               {coords && (
                 <Marker position={coords} icon={driverLeafletIcon}>
                   <Popup>Your location</Popup>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { MapContainer, Marker, useMap, useMapEvents } from 'react-leaflet';
+import OpenFreeMapLayer from '@/components/OpenFreeMapLayer';
 import { Loader2 } from 'lucide-react';
 import { reverseGeocode } from '@/utils/geocode';
 
@@ -73,10 +74,7 @@ export function LocationPicker({ onLocationChange }: LocationPickerProps) {
         zoom={16}
         scrollWheelZoom
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <OpenFreeMapLayer />
         <LocationPickerMap markerPos={markerPos} onPositionChange={updatePosition} />
       </MapContainer>
       <div className="text-sm text-muted-foreground flex items-start gap-2 min-h-[1.5rem]">

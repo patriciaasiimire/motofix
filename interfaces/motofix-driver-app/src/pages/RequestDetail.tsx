@@ -13,7 +13,8 @@ import {
   AlertTriangle, MessageCircle, Star,
 } from 'lucide-react';
 import L from 'leaflet';
-import { MapContainer, Marker, Polyline, TileLayer, useMap, useMapEvents } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, useMap, useMapEvents } from 'react-leaflet';
+import OpenFreeMapLayer from '@/components/OpenFreeMapLayer';
 import { requestsService, paymentsService, mechanicService, chatService } from '@/config/api';
 import type { MechanicPublicProfile } from '@/config/api';
 import MechanicAssignedCard from '@/components/MechanicAssignedCard';
@@ -414,11 +415,7 @@ function TrackingMap({
 
   const mapChildren = (interactedRef: { current: boolean }) => (
     <>
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        eventHandlers={{ tileerror: () => toast.error('Map tiles could not load. Your request details are still available.') }}
-      />
+      <OpenFreeMapLayer />
       <RequestMapViewport
         points={points}
         driverPos={driverPos}
