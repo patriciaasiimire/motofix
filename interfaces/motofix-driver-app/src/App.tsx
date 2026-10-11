@@ -45,7 +45,6 @@ import FaultChat from "./pages/FaultChat";
 import GetHelp from "./pages/GetHelp";
 import GetHelpLocation from "./pages/GetHelpLocation";
 import NearbyMechanics from "./pages/NearbyMechanics";
-import SOSFaultPicker from "./pages/SOSFaultPicker";
 import EmergencyAlert from "./pages/EmergencyAlert";
 import InsurancePage from "./pages/InsurancePage";
 import Reminders from "./pages/Reminders";
@@ -140,17 +139,15 @@ function AppContent() {
           path="/describe-issue"
           element={
             <PrivateRoute>
-              <DescribeIssue />
+              {MOTOBOT_ENABLED
+                ? <DescribeIssue />
+                : <Navigate to="/get-help" replace />}
             </PrivateRoute>
           }
         />
         <Route
           path="/sos"
-          element={
-            <PrivateRoute>
-              <SOSFaultPicker />
-            </PrivateRoute>
-          }
+          element={<Navigate to="/get-help" replace />}
         />
         <Route
           path="/get-help"
@@ -190,7 +187,7 @@ function AppContent() {
             <PrivateRoute>
               {MOTOBOT_ENABLED
                 ? <FaultChat />
-                : <Navigate to="/describe-issue" replace state={location.state} />}
+                : <Navigate to="/get-help" replace state={location.state} />}
             </PrivateRoute>
           }
         />

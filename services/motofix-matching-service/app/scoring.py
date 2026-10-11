@@ -276,6 +276,7 @@ def score_mechanic(
             or f"Mechanic {mechanic['id']}"
         ),
         "phone": mechanic.get("phone"),
+        "location": mechanic.get("location"),
         "fcm_token": mechanic.get("fcm_token"),
         "distance_km": round(distance_km, 2),
         "capability_tier": _capability_tier(mechanic, service_type),
@@ -378,6 +379,7 @@ def rank_launch_fallback(
             "is_preferred": mechanic_id == preferred_mechanic_id,
             "mechanic_name": mechanic.get("name") or mechanic.get("full_name") or f"Mechanic {mechanic_id}",
             "phone": mechanic.get("phone"),
+            "location": mechanic.get("location"),
             "fcm_token": mechanic.get("fcm_token"),
             "distance_km": round(distance, 2),
             "capability_tier": capability_tier,

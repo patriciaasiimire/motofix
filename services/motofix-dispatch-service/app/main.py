@@ -1758,6 +1758,114 @@ async def get_request(request_id: int, current_user: Dict = Depends(get_current_
     return request_data
 
 
+@app.get("/requests/{request_id}/matches")
+async def get_request_matches(
+    request_id: int,
+    current_user: Dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Return area-matched mechanics to the owning driver for call-based V1 fulfillment."""
+    role = (current_user.get("role") or "driver").lower()
+    if role not in ("driver", "admin"):
+        raise HTTPException(status_code=403, detail="Only drivers can view request matches")
+
+    request_row = await db.fetchrow(
+        """
+        SELECT id, user_id, phone, service_type, area_id, location_text, location, latitude, longitude
+        FROM service_requests
+        WHERE id = $1
+        """,
+        request_id,
+    )
+    if not request_row:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    if role == "driver":
+        user_id = current_user.get("id")
+        user_phone = current_user.get("phone")
+        owns_by_id = (
+            request_row.get("user_id") is not None
+            and user_id is not None
+            and int(request_row["user_id"]) == int(user_id)
+        )
+        owns_by_phone = bool(user_phone and request_row.get("phone") == user_phone)
+        if not owns_by_id and not owns_by_phone:
+            raise HTTPException(status_code=403, detail="Not allowed")
+
+    request_location = request_row.get("location_text") or request_row.get("location") or ""
+    match_body: Dict[str, Any] = {
+        "request_id": request_id,
+        "service_type": request_row["service_type"],
+        "top_n": 10,
+    }
+    if request_row.get("area_id") is not None:
+        match_body["area_id"] = request_row["area_id"]
+    if request_row.get("latitude") is not None and request_row.get("longitude") is not None:
+        match_body["latitude"] = request_row["latitude"]
+        match_body["longitude"] = request_row["longitude"]
+
+    if "area_id" not in match_body and "latitude" not in match_body:
+        return {
+            "request_id": str(request_id),
+            "area_name": None,
+            "candidates": [],
+            "message": "Select a service area to find eligible mechanics.",
+        }
+
+    matching_url = os.getenv("MATCHING_SERVICE_URL", "http://127.0.0.1:8003").rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            response = await client.post(
+                f"{matching_url}/match",
+                headers={"Authorization": f"Bearer {_service_token()}"},
+                json=match_body,
+            )
+            if response.status_code == 404:
+                return {
+                    "request_id": str(request_id),
+                    "area_name": None,
+                    "candidates": [],
+                    "message": "No eligible mechanics were found in this area.",
+                }
+            response.raise_for_status()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                logger.error("Matching service returned invalid JSON for request %s: %s", request_id, exc)
+                raise HTTPException(status_code=502, detail="Matching service returned an invalid response")
+    except httpx.HTTPStatusError as exc:
+        logger.error("Matching service failed for request %s: HTTP %s", request_id, exc.response.status_code)
+        raise HTTPException(status_code=502, detail="Matching service could not find mechanics right now")
+    except httpx.RequestError as exc:
+        logger.error("Matching service unavailable for request %s: %s", request_id, exc)
+        raise HTTPException(status_code=502, detail="Matching service is temporarily unavailable")
+
+    raw_candidates = payload.get("candidates") if isinstance(payload, dict) else None
+    if not isinstance(raw_candidates, list):
+        logger.error("Matching service returned an invalid candidates list for request %s", request_id)
+        raise HTTPException(status_code=502, detail="Matching service returned an invalid response")
+    if not all(isinstance(candidate, dict) for candidate in raw_candidates):
+        logger.error("Matching service returned malformed candidates for request %s", request_id)
+        raise HTTPException(status_code=502, detail="Matching service returned an invalid response")
+
+    area_name = payload.get("resolved_area_name")
+    candidates = [
+        {
+            "mechanic_id": candidate.get("mechanic_id"),
+            "mechanic_name": candidate.get("mechanic_name") or "Mechanic",
+            "phone": candidate.get("phone"),
+            "area": candidate.get("location") or area_name or request_location or None,
+        }
+        for candidate in raw_candidates
+    ]
+    return {
+        "request_id": str(request_id),
+        "area_name": area_name or request_location or None,
+        "candidates": candidates,
+        "message": None if candidates else "No eligible mechanics were found in this area.",
+    }
+
+
 @app.get("/requests/{request_id}/call-partner", response_model=CallPartnerResponse)
 async def get_call_partner_phone(
     request_id: int,

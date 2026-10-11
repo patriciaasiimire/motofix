@@ -37,6 +37,7 @@ class MechanicCandidate(BaseModel):
     mechanic_id: int
     mechanic_name: str
     phone: Optional[str]
+    location: Optional[str] = None
     fcm_token: Optional[str] = None
     distance_km: float
     total_score: float

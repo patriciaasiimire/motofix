@@ -17,7 +17,7 @@ import L from 'leaflet';
 import { MapContainer, Marker, Polyline, useMap, useMapEvents } from 'react-leaflet';
 import OpenFreeMapLayer from '@/components/OpenFreeMapLayer';
 import { requestsService, paymentsService, mechanicService, chatService, SERVICE_AREAS } from '@/config/api';
-import type { MechanicPublicProfile } from '@/config/api';
+import type { MechanicPublicProfile, RequestMechanicMatch } from '@/config/api';
 import MechanicAssignedCard from '@/components/MechanicAssignedCard';
 import FinalPaymentFlow from '@/components/FinalPaymentFlow';
 import { toast } from 'sonner';
@@ -587,6 +587,9 @@ export default function RequestDetail() {
   const { requests, paymentsEnabled, sendWsMessage, markCancelled, revertCancelled } = useRequests();
 
   const [request, setRequest] = useState<Request | null>(null);
+  const [matchedMechanics, setMatchedMechanics] = useState<RequestMechanicMatch[]>([]);
+  const [matchesLoading, setMatchesLoading] = useState(false);
+  const [matchesError, setMatchesError] = useState<string | null>(null);
   const jobTypeLabel = /tow|recovery/i.test(request?.service_type ?? '') ? 'Tow / recovery' : 'Roadside assist';
   const [isLoading, setIsLoading] = useState(true);
   const [isCalling, setIsCalling] = useState(false);
@@ -606,10 +609,7 @@ export default function RequestDetail() {
   const [isPaying, setIsPaying] = useState(false);
   const [isCashPaying, setIsCashPaying] = useState(false);
 
-  const [acceptCountdown,   setAcceptCountdown]   = useState<string | null>(null);
-  const [acceptSecondsLeft, setAcceptSecondsLeft] = useState<number | null>(null);
-  const [noProviders, setNoProviders] = useState(false);
-  const [isTryingAgain, setIsTryingAgain] = useState(false);
+  const [isChangingArea, setIsChangingArea] = useState(false);
   const [acceptedNotif, setAcceptedNotif] = useState(false);
   const [showCallSheet, setShowCallSheet] = useState(false);
   const [etaNearBannerShown, setEtaNearBannerShown] = useState(false);
@@ -740,6 +740,31 @@ export default function RequestDetail() {
       .catch(() => { if (!cached) setIsLoading(false); });
   }, [id, requests]);
 
+  const loadMatches = useCallback(async () => {
+    if (!id) return;
+    setMatchesLoading(true);
+    setMatchesError(null);
+    try {
+      const response = await requestsService.getMatches(id);
+      setMatchedMechanics(response.data.candidates ?? []);
+      if (!response.data.candidates?.length) {
+        setMatchesError(response.data.message || 'No mechanics were found in this area. Try again or choose another area.');
+      }
+    } catch (error: unknown) {
+      const detail = axios.isAxiosError<{ detail?: unknown }>(error) ? error.response?.data?.detail : null;
+      setMatchedMechanics([]);
+      setMatchesError(typeof detail === 'string' ? detail : 'Mechanics could not be loaded. Please try again.');
+    } finally {
+      setMatchesLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (request && ['pending', 'searching'].includes(request.status)) {
+      void loadMatches();
+    }
+  }, [loadMatches, request?.status]);
+
   useEffect(() => {
     const live = normalizeRequest(requests.find((r) => String(r.id) === id));
     if (!live) return;
@@ -754,7 +779,11 @@ export default function RequestDetail() {
   useEffect(() => {
     const handleNoMatch = (event: Event) => {
       const detail = (event as CustomEvent<{ request_id?: string }>).detail;
-      if (String(detail?.request_id ?? '') === String(id)) setNoProviders(true);
+      if (String(detail?.request_id ?? '') === String(id)) {
+        setMatchedMechanics([]);
+        setMatchesError('No mechanics were found in this area. Try again or choose another area.');
+        setMatchesLoading(false);
+      }
     };
     window.addEventListener('motofix:matching-empty', handleNoMatch);
     return () => window.removeEventListener('motofix:matching-empty', handleNoMatch);
@@ -835,47 +864,6 @@ export default function RequestDetail() {
     return () => clearInterval(timer);
   }, [isActive, id, sendWsMessage]);
 
-  // ── 5-minute acceptance countdown (pending only) ─────────────────────────
-  useEffect(() => {
-    if (request?.status !== 'pending') {
-      setAcceptCountdown(null);
-      setAcceptSecondsLeft(null);
-      return;
-    }
-    const WINDOW_MS = 5 * 60 * 1000;
-    // Server returns naive UTC datetimes (no 'Z' suffix). Append 'Z' so browsers
-    // don't interpret them as local time (which is +03:00 in Uganda → 3 hrs skew).
-    const rawTs = (request as any).dispatched_at || request.created_at;
-    const normalised = rawTs
-      ? /[Z+]/.test(String(rawTs)) ? String(rawTs) : String(rawTs) + 'Z'
-      : null;
-    const startMs = normalised ? (new Date(normalised).getTime() || Date.now()) : Date.now();
-
-    // Use an object ref so tick() can clear itself without stale closure issues
-    const timerRef = { id: 0 };
-
-    const tick = () => {
-      const elapsed = Date.now() - startMs;
-      const remaining = Math.max(0, WINDOW_MS - elapsed);
-      const mins = Math.floor(remaining / 60000);
-      const secs = Math.floor((remaining % 60000) / 1000);
-      setAcceptCountdown(`${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
-      setAcceptSecondsLeft(Math.round(remaining / 1000));
-      if (elapsed >= WINDOW_MS) {
-        setNoProviders(true);
-        // Clear immediately so repeated ticks can't re-show the modal after user dismisses it
-        clearInterval(timerRef.id);
-      }
-    };
-
-    tick();
-    // Only start the interval if window hasn't already expired
-    if (Date.now() - startMs < WINDOW_MS) {
-      timerRef.id = window.setInterval(tick, 1000);
-    }
-    return () => window.clearInterval(timerRef.id);
-  }, [request?.status, (request as any)?.dispatched_at, request?.created_at]);
-
   // ── Notify driver when mechanic accepts ──────────────────────────────────
   useEffect(() => {
     if (!request) return;
@@ -901,7 +889,6 @@ export default function RequestDetail() {
     }
     if (prev === 'pending' && request.status === 'accepted') {
       setAcceptedNotif(true);
-      setNoProviders(false);
       setTimeout(() => setAcceptedNotif(false), 5000);
       // Pre-fetch mechanic phone for the call sheet
       if (id) {
@@ -1163,30 +1150,12 @@ export default function RequestDetail() {
     }
   };
 
-  const handleTryAgain = async () => {
-    if (!id) return;
-    setIsTryingAgain(true);
-    setNoProviders(false);
-    try {
-      const res = await requestsService.redispatch(id);
-      const updated = res.data?.request ?? res.data;
-      const normalized = normalizeRequest(updated);
-      if (normalized) setRequest(normalized);
-      toast('Looking for mechanics again…', { icon: '🔍' });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to redispatch. Please try again.');
-    } finally {
-      setIsTryingAgain(false);
-    }
-  };
-
   const handleChangeArea = async () => {
     if (!id || !request) return;
-    setIsTryingAgain(true);
+    setIsChangingArea(true);
     try {
       await requestsService.updateStatus(id, 'cancelled', 'Driver is changing the service area');
       markCancelled(id);
-      setNoProviders(false);
       navigate('/get-help/location', {
         replace: true,
         state: {
@@ -1198,7 +1167,21 @@ export default function RequestDetail() {
       const detail = axios.isAxiosError<{ detail?: unknown }>(err) ? err.response?.data?.detail : null;
       toast.error(typeof detail === 'string' ? detail : 'Could not cancel this request to change area.');
     } finally {
-      setIsTryingAgain(false);
+      setIsChangingArea(false);
+    }
+  };
+
+  const handleCancelCallRequest = async () => {
+    if (!id || !window.confirm('Cancel this help request?')) return;
+    try {
+      await requestsService.updateStatus(id, 'cancelled', 'Driver cancelled request');
+      markCancelled(id);
+      setRequest((current) => current ? { ...current, status: 'cancelled' } : current);
+      toast.success('Request cancelled');
+      navigate('/requests', { replace: true });
+    } catch (error: unknown) {
+      const detail = axios.isAxiosError<{ detail?: unknown }>(error) ? error.response?.data?.detail : null;
+      toast.error(typeof detail === 'string' ? detail : 'Could not cancel this request. Please try again.');
     }
   };
 
@@ -1271,6 +1254,105 @@ export default function RequestDetail() {
         <p className="text-foreground font-semibold">Request not found</p>
         <button type="button" onClick={() => navigate(-1)} className="text-primary text-sm">Go back</button>
       </div>
+    );
+  }
+
+  if (['pending', 'searching'].includes(request.status)) {
+    return (
+      <main className="min-h-screen bg-background px-4 pb-28">
+        <header className="mx-auto flex max-w-md items-center gap-3 border-b border-border/50 py-4">
+          <button type="button" onClick={() => navigate('/requests')} className="rounded-xl p-2 hover:bg-muted" aria-label="Back to home">
+            <ChevronLeft className="h-5 w-5 text-foreground" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate font-bold text-foreground">GET HELP</h1>
+            <p className="text-xs text-muted-foreground">Request #{String(request.id).padStart(6, '0')}</p>
+          </div>
+          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-500">
+            Searching
+          </span>
+        </header>
+
+        <div className="mx-auto mt-4 max-w-md space-y-4">
+          <section className="glass-card rounded-2xl p-4">
+            <h2 className="text-base font-bold text-foreground">Call a mechanic directly</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Choose a verified, available mechanic below and call using your phone. No provider app is needed.
+            </p>
+            <p className="mt-3 flex items-center gap-2 text-sm font-semibold text-foreground">
+              <MapPin className="h-4 w-4 text-primary" />
+              {request.location_text || request.location || 'Area not provided'}
+            </p>
+            {request.description && <p className="mt-2 text-sm text-muted-foreground">{request.description}</p>}
+            {request.created_at && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Requested {new Date(normTs(request.created_at)).toLocaleString()}
+              </p>
+            )}
+          </section>
+
+          <section className="glass-card rounded-2xl p-4" aria-live="polite">
+            <h2 className="text-base font-bold text-foreground">Mechanics in this area</h2>
+            {matchesLoading ? (
+              <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Finding verified, available mechanics…
+              </div>
+            ) : matchedMechanics.length > 0 ? (
+              <ul className="mt-3 space-y-3">
+                {matchedMechanics.map((mechanic) => (
+                  <li key={mechanic.mechanic_id} className="rounded-xl border border-border p-3">
+                    <p className="font-semibold text-foreground">{mechanic.mechanic_name}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Area: {mechanic.area || request.location_text || 'Your selected area'}
+                    </p>
+                    {mechanic.phone ? (
+                      <a
+                        className="mt-3 inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 font-semibold text-primary-foreground"
+                        href={`tel:${mechanic.phone}`}
+                      >
+                        <Phone className="h-4 w-4" /> Call mechanic
+                      </a>
+                    ) : (
+                      <p className="mt-3 text-sm text-muted-foreground">Phone number unavailable.</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="mt-3">
+                <p className="text-sm text-muted-foreground">
+                  {matchesError || 'No mechanics were found in this area. Try again or choose another area.'}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void loadMatches()}
+                    className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground"
+                  >
+                    Try matching again
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleChangeArea()}
+                    disabled={isChangingArea}
+                    className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground disabled:opacity-60"
+                  >
+                    {isChangingArea ? 'Changing area…' : 'Change area'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <button
+            type="button"
+            onClick={() => void handleCancelCallRequest()}
+            className="min-h-11 w-full rounded-xl border border-destructive/40 px-4 text-sm font-semibold text-destructive"
+          >
+            Cancel request
+          </button>
+        </div>
+      </main>
     );
   }
 
@@ -1612,44 +1694,22 @@ export default function RequestDetail() {
               // once the job is completed, never mid-service (avoids stale live values).
               const isDone = request.status === 'completed';
               const items = [
-                // Pending → live countdown; once accepted the card disappears
-                request.status === 'pending' && acceptCountdown != null
-                  ? { label: 'Time to Accept', value: acceptCountdown }
-                  : null,
                 isDone && tDrive   != null ? { label: 'Drive time',     value: fmtDuration(tDrive) }   : null,
                 isDone && tService != null ? { label: 'Service time',   value: fmtDuration(tService) } : null,
                 isDone && total    != null ? { label: 'Total duration', value: fmtDuration(total) }    : null,
               ].filter(Boolean) as { label: string; value: string }[];
               if (items.length === 0) return null;
               return (
-                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <div className="grid grid-cols-2 gap-2 mb-4">
                   {items.map((it) => {
-                    const isCountdown = it.label === 'Time to Accept';
-                    const barColor = (acceptSecondsLeft ?? 300) > 120
-                      ? '#F59E0B'
-                      : (acceptSecondsLeft ?? 300) > 60
-                        ? '#fb923c'
-                        : '#f87171';
-                    const barPct = Math.max(0, ((acceptSecondsLeft ?? 0) / 300) * 100);
-                    return (
-                      <div key={it.label} className="rounded-xl border border-border/50 bg-card/50 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{it.label}</p>
-                        <p className="text-sm font-bold text-foreground flex items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-muted-foreground" /> {it.value}
-                        </p>
-                        {isCountdown && (
-                          <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.1)', marginTop: 6, overflow: 'hidden' }}>
-                            <div style={{
-                              height: '100%', borderRadius: 2,
-                              background: `linear-gradient(90deg, ${barColor}, ${barColor}bb)`,
-                              width: `${barPct}%`,
-                              transition: 'width 1s linear, background 0.5s ease',
-                              boxShadow: `0 0 6px ${barColor}88`,
-                            }} />
-                          </div>
-                        )}
-                      </div>
-                    );
+                      return (
+                        <div key={it.label} className="rounded-xl border border-border/50 bg-card/50 px-3 py-2">
+                          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{it.label}</p>
+                          <p className="text-sm font-bold text-foreground flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-muted-foreground" /> {it.value}
+                          </p>
+                        </div>
+                      );
                   })}
                 </div>
               );
@@ -2094,60 +2154,6 @@ export default function RequestDetail() {
             <p style={{ fontSize: 12, color: 'var(--text-faint)' }}>{request.mechanic_name} accepted your request</p>
           </div>
         </div>
-      )}
-
-      {/* ── No providers modal (countdown expired) ── */}
-      {noProviders && request?.status === 'pending' && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }} />
-          <div style={{
-            position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 90,
-            maxWidth: 480, margin: '0 auto',
-            borderRadius: '24px 24px 0 0',
-            background: 'var(--overlay-bg)',
-            border: '1px solid rgba(245,158,11,0.2)',
-            boxShadow: '0 -12px 60px rgba(0,0,0,0.7)',
-            padding: '28px 24px',
-            paddingBottom: 'max(calc(env(safe-area-inset-bottom, 0px) + 24px), 32px)',
-            animation: 'cancel-slide-up 0.34s cubic-bezier(0.34,1.56,0.64,1)',
-          }}>
-            <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--border-4)', margin: '0 auto 24px' }} />
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 20 }}>
-              <div style={{ width: 64, height: 64, borderRadius: '50%', background: 'rgba(245,158,11,0.12)', border: '2px solid rgba(245,158,11,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <AlertTriangle style={{ width: 30, height: 30, color: '#F59E0B' }} />
-              </div>
-            </div>
-            <h2 style={{ color: 'var(--text-hi)', fontWeight: 900, fontSize: 20, textAlign: 'center', marginBottom: 10 }}>
-              No mechanics available
-            </h2>
-            <p style={{ color: 'var(--text-lo)', fontSize: 13, textAlign: 'center', lineHeight: 1.65, marginBottom: 28 }}>
-              We couldn&apos;t find an available service provider for this request right now. You can try again or cancel the request.
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <button
-                onClick={handleTryAgain}
-                disabled={isTryingAgain}
-                style={{ width: '100%', height: 54, borderRadius: 16, border: 'none', background: isTryingAgain ? 'rgba(245,158,11,0.5)' : 'linear-gradient(135deg, #F59E0B, #D97706)', color: '#000', fontWeight: 800, fontSize: 15, cursor: isTryingAgain ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
-              >
-                {isTryingAgain && <Loader2 style={{ width: 16, height: 16, animation: 'spin 1s linear infinite' }} />}
-                {isTryingAgain ? 'Searching…' : 'Try Again'}
-              </button>
-              <button
-                onClick={() => { setNoProviders(false); setCancelPhase('warning'); }}
-                style={{ width: '100%', height: 54, borderRadius: 16, border: 'none', background: '#ff2d2d', color: '#fff', fontWeight: 800, fontSize: 15, cursor: 'pointer' }}
-              >
-                Cancel Request
-              </button>
-              <button
-                onClick={handleChangeArea}
-                disabled={isTryingAgain}
-                style={{ width: '100%', height: 48, borderRadius: 14, border: '1px solid var(--border-3)', background: 'var(--surface-3)', color: 'var(--text-hi)', fontWeight: 700, fontSize: 14, cursor: isTryingAgain ? 'not-allowed' : 'pointer' }}
-              >
-                Change area
-              </button>
-            </div>
-          </div>
-        </>
       )}
 
       {/* ── Call options sheet ── */}

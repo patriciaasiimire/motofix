@@ -209,6 +209,20 @@ export interface DocVerificationResult {
 }
 
 // Requests API functions
+export interface RequestMechanicMatch {
+  mechanic_id: number;
+  mechanic_name: string;
+  phone: string | null;
+  area: string | null;
+}
+
+export interface RequestMatchesResponse {
+  request_id: string;
+  area_name: string | null;
+  candidates: RequestMechanicMatch[];
+  message: string | null;
+}
+
 export const requestsService = {
   create: (data: {
     service_type: string;              // 'mechanic' | 'tow'
@@ -231,6 +245,9 @@ export const requestsService = {
   getAll: () => requestsApi.get('/requests/'),
   
   getById: (id: string) => requestsApi.get(`/requests/${id}`),
+
+  getMatches: (id: string) =>
+    requestsApi.get<RequestMatchesResponse>(`/requests/${id}/matches`),
   
   updateStatus: (id: string, status: string, cancelReason?: string) =>
     requestsApi.patch(`/requests/${id}/status`, null, {
