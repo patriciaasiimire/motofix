@@ -24,10 +24,7 @@ export default defineConfig({
     // so `npm run dev` serves it by default — no need to pass --port each time.
     port: 8088,
     strictPort: true,
-    https: {
-      cert: '../motofix-driver-app/cert.pem',
-      key:  '../motofix-driver-app/cert-key.pem',
-    },
+    // HTTPS disabled for local Windows dev; re-enable only with valid cert.pem and cert-key.pem.
     proxy: {
       // Use 127.0.0.1 (not "localhost"): on Windows + Docker here, "localhost"
       // resolves to IPv6 ::1 and the port-forward is flaky, so proxied API calls
