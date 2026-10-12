@@ -1,9 +1,7 @@
 // src/services/driverWs.ts
 // Production-ready WebSocket client for real-time request status updates
 
-import { REQUESTS_BASE_URL } from '@/config/api';
-
-const WS_BASE = REQUESTS_BASE_URL.replace(/^https/, 'wss').replace(/^http/, 'ws');
+import { WS_URL } from '@/config/api';
 
 export interface WsPayload {
   type: string;
@@ -36,23 +34,30 @@ export function createRequestsWs(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let retryCount = 0;
+  let loggedUnavailable = false;
 
   const connect = () => {
-    if (stopped) return;
+    if (stopped || !localStorage.getItem('motofix_token')) return;
 
     const token = localStorage.getItem('motofix_token');
     // Pass token as query param so the backend can authenticate WS connections
-    const url = `${WS_BASE}/ws/jobs${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const fallbackUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/jobs`;
+    const url = `${WS_URL || fallbackUrl}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 
     try {
       ws = new WebSocket(url);
-    } catch {
+    } catch (error) {
+      if (!loggedUnavailable) {
+        console.error('[WS] Unable to create dispatch connection.', error);
+        loggedUnavailable = true;
+      }
       scheduleReconnect();
       return;
     }
 
     ws.onopen = () => {
       retryCount = 0;
+      loggedUnavailable = false;
       console.log('[WS] connected');
       onConnect?.();
     };
@@ -73,20 +78,36 @@ export function createRequestsWs(
     };
 
     ws.onerror = () => {
+      if (!loggedUnavailable) {
+        console.error('[WS] Dispatch connection failed; live updates will retry in the background.');
+        loggedUnavailable = true;
+      }
       // onclose will fire after onerror, triggering reconnect
       ws?.close();
     };
   };
 
   const scheduleReconnect = () => {
-    if (stopped) return;
+    if (stopped || !localStorage.getItem('motofix_token')) return;
     // Exponential backoff: 1s, 2s, 4s … capped at 30s
     const delay = Math.min(1000 * 2 ** retryCount, 30_000);
     retryCount = Math.min(retryCount + 1, 5);
-    console.log(`[WS] reconnecting in ${delay}ms (attempt ${retryCount})`);
     reconnectTimer = setTimeout(connect, delay);
   };
 
+  const onAuthChanged = () => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+    }
+    ws = null;
+    retryCount = 0;
+    if (localStorage.getItem('motofix_token')) connect();
+    else onDisconnect?.();
+  };
+  window.addEventListener('motofix:auth-changed', onAuthChanged);
   connect();
 
   const send = (data: object): void => {
@@ -98,6 +119,7 @@ export function createRequestsWs(
   return {
     stop: () => {
       stopped = true;
+      window.removeEventListener('motofix:auth-changed', onAuthChanged);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       ws?.close();
     },

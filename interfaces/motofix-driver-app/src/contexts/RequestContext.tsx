@@ -133,6 +133,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
   const previousStatusesRef  = useRef<Map<string, string>>(new Map());
   const localCancelledRef    = useRef(new Set<string>());
   const wsEverConnected = useRef(false);
+  const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quoteCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsSendRef = useRef<((data: object) => void) | null>(null);
 
@@ -216,11 +217,16 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
   const fetchAll = useCallback(async (showLoader = true) => {
     if (showLoader) setIsLoading(true);
     setError(null);
+    if (!localStorage.getItem('motofix_token')) {
+      setRequests([]);
+      setIsLoading(false);
+      return;
+    }
     try {
       const res = await requestsService.getAll();
       applyUpdates(res.data || []);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load requests');
+    } catch (err: unknown) {
+      console.error('[dispatch] Could not load requests; continuing with cached or empty state.', err);
     } finally {
       setIsLoading(false);
     }
@@ -250,7 +256,8 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       try {
         const res = await requestsService.getFeatureFlags();
         if (!cancelled) setPaymentsEnabled(!!res.data?.payments);
-      } catch {
+      } catch (err) {
+        console.warn('[dispatch] Feature flags unavailable; using disabled defaults.', err);
         if (!cancelled) setPaymentsEnabled(false);
       } finally {
         if (!cancelled) setFeatureFlagsLoaded(true);
@@ -350,6 +357,10 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       () => {
         setIsWsConnected(true);
         wsEverConnected.current = true;
+        if (fallbackPollRef.current) {
+          clearInterval(fallbackPollRef.current);
+          fallbackPollRef.current = null;
+        }
       },
       () => {
         setIsWsConnected(false);
@@ -368,11 +379,16 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     const check = setTimeout(() => {
       if (!wsEverConnected.current) {
         // Start 10-second polling as fallback
-        const interval = setInterval(() => fetchAll(false), 10_000);
-        return () => clearInterval(interval);
+        fallbackPollRef.current = setInterval(() => fetchAll(false), 10_000);
       }
     }, 15_000);
-    return () => clearTimeout(check);
+    return () => {
+      clearTimeout(check);
+      if (fallbackPollRef.current) {
+        clearInterval(fallbackPollRef.current);
+        fallbackPollRef.current = null;
+      }
+    };
   }, [fetchAll]);
 
   // Active-request watchdog (mirror of the mechanic app's). The WebSocket already pushes

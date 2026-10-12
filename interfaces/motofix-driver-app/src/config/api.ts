@@ -19,13 +19,19 @@
 import axios from 'axios';
 import { noteServerDate } from '@/utils/serverClock';
 
-// Base URLs for microservices — empty string routes through the Vite dev proxy
-export const AUTH_BASE_URL      = import.meta.env.VITE_API_AUTH_URL      ?? '';
-export const REQUESTS_BASE_URL  = import.meta.env.VITE_API_REQUESTS_URL  ?? '';
-export const PAYMENTS_BASE_URL  = import.meta.env.VITE_API_PAYMENTS_URL  ?? '';
+// Production builds retain their service destinations if a hosting environment
+// variable is missing; local development continues to use the Vite proxy.
+const serviceUrl = (configured: string | undefined, productionUrl: string) =>
+  configured || (import.meta.env.PROD ? productionUrl : '');
+
+export const AUTH_BASE_URL      = serviceUrl(import.meta.env.VITE_API_AUTH_URL, 'https://motofix-auth.onrender.com');
+export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_URL, 'https://motofix-dispatch.onrender.com');
+export const PAYMENTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_PAYMENTS_URL, 'https://motofix-dispatch.onrender.com');
 export const DIAGNOSIS_BASE_URL = import.meta.env.VITE_API_DIAGNOSIS_URL ?? '';
-export const MATCHING_BASE_URL  = import.meta.env.VITE_API_MATCHING_URL  ?? '';
+export const MATCHING_BASE_URL  = serviceUrl(import.meta.env.VITE_API_MATCHING_URL, 'https://motofix-matching.onrender.com');
 export const INSURANCE_BASE_URL = import.meta.env.VITE_API_INSURANCE_URL ?? '';
+const requestsWsBase = REQUESTS_BASE_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+export const WS_URL = import.meta.env.VITE_WS_URL || (requestsWsBase ? `${requestsWsBase}/ws/jobs` : '');
 
 // Add startup logging
 console.log('🚀 Initializing Motofix API:', {
@@ -242,7 +248,7 @@ export const requestsService = {
     return requestsApi.post('/requests-with-media/', formData);
   },
   
-  getAll: () => requestsApi.get('/requests/'),
+  getAll: () => requestsApi.get('/requests/', { timeout: 12_000 }),
   
   getById: (id: string) => requestsApi.get(`/requests/${id}`),
 
@@ -258,7 +264,7 @@ export const requestsService = {
     requestsApi.get<{ phone: string }>(`/requests/${id}/call-partner`),
 
   // Feature flags are DB-backed and vary by deployment via `SERVICE_VARIANT`
-  getFeatureFlags: () => requestsApi.get('/feature-flags'),
+  getFeatureFlags: () => requestsApi.get('/feature-flags', { timeout: 12_000 }),
 
   redispatch: (id: string) =>
     requestsApi.post(`/requests/${id}/redispatch`),

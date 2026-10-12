@@ -1,7 +1,3 @@
-# Run from Actions > Android Build > Run workflow. Debug APKs need no signing secrets.
-# Release signing needs ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
-# ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD. Optional VITE_* secrets are mapped below.
-# Native Android may be generated on this runner; developers do not run cap add android or Gradle locally.
 name: Android Build
 
 on:
@@ -17,8 +13,7 @@ on:
         required: false
   push:
     branches:
-      - main
-      - master
+      - release/v1
 
 permissions:
   contents: read
@@ -37,23 +32,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: interfaces/motofix-driver-app/package-lock.json
 
-      - name: Install npm dependencies
-        run: npm ci
-
       - name: Create production environment file
         env:
-          VITE_API_AUTH_URL: ${{ secrets.VITE_API_AUTH_URL }}
-          VITE_API_REQUESTS_URL: ${{ secrets.VITE_API_REQUESTS_URL }}
-          VITE_API_PAYMENTS_URL: ${{ secrets.VITE_API_PAYMENTS_URL }}
-          VITE_API_DIAGNOSIS_URL: ${{ secrets.VITE_API_DIAGNOSIS_URL }}
-          VITE_API_MATCHING_URL: ${{ secrets.VITE_API_MATCHING_URL }}
-          VITE_API_INSURANCE_URL: ${{ secrets.VITE_API_INSURANCE_URL }}
-          VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
-          VITE_PROVIDER_URL: ${{ secrets.VITE_PROVIDER_URL }}
+          VITE_API_AUTH_URL: ${{ vars.VITE_API_AUTH_URL || secrets.VITE_API_AUTH_URL || 'https://motofix-auth.onrender.com' }}
+          VITE_API_MATCHING_URL: ${{ vars.VITE_API_MATCHING_URL || secrets.VITE_API_MATCHING_URL || 'https://motofix-matching.onrender.com' }}
+          VITE_API_REQUESTS_URL: ${{ vars.VITE_API_REQUESTS_URL || secrets.VITE_API_REQUESTS_URL || 'https://motofix-dispatch.onrender.com' }}
+          VITE_API_MECHANICS_URL: ${{ vars.VITE_API_MECHANICS_URL || secrets.VITE_API_MECHANICS_URL || 'https://motofix-verification.onrender.com' }}
+          VITE_WS_URL: ${{ vars.VITE_WS_URL || secrets.VITE_WS_URL || 'wss://motofix-dispatch.onrender.com/ws/jobs' }}
+          VITE_PROVIDER_URL: ${{ vars.VITE_PROVIDER_URL || secrets.VITE_PROVIDER_URL || 'https://motofixug.netlify.app' }}
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
           VITE_GOOGLE_MAPS_MAP_ID: ${{ secrets.VITE_GOOGLE_MAPS_MAP_ID }}
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
@@ -63,51 +53,83 @@ jobs:
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
           VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
+          VITE_MOTOBOT_ENABLED: "false"
         shell: bash
         run: |
           vars=(
-            VITE_API_AUTH_URL VITE_API_REQUESTS_URL VITE_API_PAYMENTS_URL
-            VITE_API_DIAGNOSIS_URL VITE_API_MATCHING_URL VITE_API_INSURANCE_URL
-            VITE_WS_URL VITE_PROVIDER_URL VITE_GOOGLE_MAPS_API_KEY
-            VITE_GOOGLE_MAPS_MAP_ID VITE_FIREBASE_API_KEY VITE_FIREBASE_AUTH_DOMAIN
-            VITE_FIREBASE_PROJECT_ID VITE_FIREBASE_STORAGE_BUCKET
-            VITE_FIREBASE_MESSAGING_SENDER_ID VITE_FIREBASE_APP_ID
-            VITE_FIREBASE_VAPID_KEY
+            VITE_API_AUTH_URL VITE_API_MATCHING_URL VITE_API_REQUESTS_URL
+            VITE_API_MECHANICS_URL VITE_WS_URL VITE_PROVIDER_URL
           )
           : > .env.production
           for name in "${vars[@]}"; do
+            value="${!name}"
+            case "$name" in
+              VITE_WS_URL)
+                case "$value" in
+                  wss://*) ;;
+                  *) echo "::error::$name must use wss:// for production builds."; exit 1 ;;
+                esac
+                ;;
+              *)
+                case "$value" in
+                  https://*) ;;
+                  *) echo "::error::$name must use https:// for production builds."; exit 1 ;;
+                esac
+                ;;
+            esac
+            case "$value" in
+              *localhost*|*127.0.0.1*)
+                echo "::error::$name must not point to localhost."; exit 1
+                ;;
+            esac
+            printf '%s=%s\n' "$name" "$value" >> .env.production
+          done
+          for name in VITE_GOOGLE_MAPS_API_KEY VITE_GOOGLE_MAPS_MAP_ID \
+            VITE_FIREBASE_API_KEY VITE_FIREBASE_AUTH_DOMAIN VITE_FIREBASE_PROJECT_ID \
+            VITE_FIREBASE_STORAGE_BUCKET VITE_FIREBASE_MESSAGING_SENDER_ID \
+            VITE_FIREBASE_APP_ID VITE_FIREBASE_VAPID_KEY; do
             value="${!name}"
             if [ -n "$value" ]; then
               printf '%s=%s\n' "$name" "$value" >> .env.production
             fi
           done
-          if [ ! -s .env.production ]; then
-            rm .env.production
-            echo "No VITE_* secrets provided; Vite defaults will be used."
-          fi
+          printf 'VITE_MOTOBOT_ENABLED=false\n' >> .env.production
+
+      - name: Install npm dependencies
+        run: npm ci
 
       - name: Build web app
         run: npm run build
 
-      - name: Install Capacitor on runner
-        run: npm install --no-save --package-lock=false @capacitor/core@^7 @capacitor/android@^7 @capacitor/cli@^7
-
-      - name: Initialize Capacitor config if missing
-        shell: bash
+      - name: Verify web assets before Capacitor sync
         run: |
-          if [ ! -f capacitor.config.ts ] && [ ! -f capacitor.config.json ]; then
-            npx cap init "MotoFix Driver" "org.motofix.driver" --web-dir dist
-          fi
+          test -s dist/index.html || {
+            echo "::error::Vite build did not create dist/index.html."
+            exit 1
+          }
+          echo "Vite output exists: $(find dist -type f | wc -l) files in dist/." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate Android project if missing
         shell: bash
         run: |
           if [ ! -d android ]; then
-            npx cap add android
+            npx cap add android || {
+              echo "::error::Capacitor could not generate the Android project. Check capacitor.config.ts and the Capacitor dependencies."
+              exit 1
+            }
           fi
 
       - name: Sync Capacitor Android project
-        run: npx cap sync android
+        run: |
+          npx cap sync android || {
+            echo "::error::Capacitor could not sync the Android project. Check the app build output and Capacitor configuration."
+            exit 1
+          }
+          test -s android/app/src/main/assets/public/index.html || {
+            echo "::error::Capacitor did not copy dist/index.html into the Android web assets."
+            exit 1
+          }
+          echo "Capacitor sync copied dist/ into android/app/src/main/assets/public/." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Java 21
         uses: actions/setup-java@v4
@@ -118,48 +140,38 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: platform-tools build-tools;34.0.0 platforms;android-34
-
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Setup Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
-        env:
-          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
-          ANDROID_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEYSTORE_PASSWORD }}
-          ANDROID_DEBUG_KEY_ALIAS: ${{ secrets.ANDROID_DEBUG_KEY_ALIAS }}
-          ANDROID_DEBUG_KEY_PASSWORD: ${{ secrets.ANDROID_DEBUG_KEY_PASSWORD }}
+        if: github.event_name == 'push' || inputs.build_type == 'debug'
         run: |
           chmod +x android/gradlew
           cd android
-          if [ -n "$ANDROID_DEBUG_KEYSTORE_BASE64" ] || [ -n "$ANDROID_DEBUG_KEYSTORE_PASSWORD" ] || [ -n "$ANDROID_DEBUG_KEY_ALIAS" ] || [ -n "$ANDROID_DEBUG_KEY_PASSWORD" ]; then
-            if [ -z "$ANDROID_DEBUG_KEYSTORE_BASE64" ] || [ -z "$ANDROID_DEBUG_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_DEBUG_KEY_ALIAS" ] || [ -z "$ANDROID_DEBUG_KEY_PASSWORD" ]; then
-              echo "::error::Set all four ANDROID_DEBUG_* signing secrets to use a stable debug certificate."
-              exit 1
-            fi
-            echo "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/motofix-debug.keystore"
-            ./gradlew assembleDebug \
-              -Pandroid.injected.signing.store.file="$RUNNER_TEMP/motofix-debug.keystore" \
-              -Pandroid.injected.signing.store.password="$ANDROID_DEBUG_KEYSTORE_PASSWORD" \
-              -Pandroid.injected.signing.key.alias="$ANDROID_DEBUG_KEY_ALIAS" \
-              -Pandroid.injected.signing.key.password="$ANDROID_DEBUG_KEY_PASSWORD"
-          else
-            ./gradlew assembleDebug
-          fi
+          ./gradlew assembleDebug
 
       - name: Decode release keystore
         if: github.event_name == 'workflow_dispatch' && inputs.build_type == 'release'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "::error::Set ANDROID_KEYSTORE_BASE64 and the other Android signing secrets to build a release."
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::Release builds require ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD."
             exit 1
           fi
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/motofix-release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/motofix-release.keystore"
+          test -s "$RUNNER_TEMP/motofix-release.keystore" || {
+            echo "::error::ANDROID_KEYSTORE_BASE64 did not decode to a keystore."
+            exit 1
+          }
 
       - name: Build signed release APK and AAB
         if: github.event_name == 'workflow_dispatch' && inputs.build_type == 'release'
@@ -168,10 +180,6 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
-            echo "::error::Set ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD for release signing."
-            exit 1
-          fi
           chmod +x android/gradlew
           cd android
           ./gradlew bundleRelease assembleRelease \
@@ -181,6 +189,7 @@ jobs:
             -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
 
       - name: Upload debug APK
+        if: github.event_name == 'push' || inputs.build_type == 'debug'
         uses: actions/upload-artifact@v4
         with:
           name: motofix-driver-debug-apk

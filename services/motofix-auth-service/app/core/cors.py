@@ -25,6 +25,7 @@ def _origin_allowed(origin: str | None) -> bool:
 
 # Production-safe allowed origins - NO wildcards
 ALLOWED_ORIGINS = [
+    "https://motofixug.netlify.app",   # Production V1 driver web app
     "https://customer.motofix.org",      # Primary customer/driver app
     "https://admin.motofix.org",         # Admin dashboard
     "https://motofix.org",               # Main domain
