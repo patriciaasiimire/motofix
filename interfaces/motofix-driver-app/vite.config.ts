@@ -38,10 +38,24 @@ export default defineConfig(({ mode }) => {
   return {
     base: "./",
     customLogger: logger,
+    // Production only: strip debug logs (including the token log) from the bundle.
+    // console.error and console.warn are kept so real failures still show up.
+    // Requires: npm i -D terser
+    build:
+      mode === "production"
+        ? {
+            minify: "terser",
+            terserOptions: {
+              compress: {
+                pure_funcs: ["console.log", "console.info", "console.debug"],
+              },
+            },
+          }
+        : {},
     server: {
       host: "127.0.0.1",
       port: 8085,
-      allowedHosts: 'all',
+      allowedHosts: true,
       proxy: {
       '/auth':         { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/users':        { target: 'http://127.0.0.1:8000', changeOrigin: true },
