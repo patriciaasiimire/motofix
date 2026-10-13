@@ -13,6 +13,7 @@
 // New screen? Add its page import, then a <Route> here. The bottom nav is shown
 // consistently on authenticated screens and omitted from public/auth screens.
 
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -29,6 +30,7 @@ import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { useFcmToken } from "@/hooks/useFcmToken";
 import { useReminderScheduler } from "@/hooks/useReminderScheduler";
 import { MOTOBOT_ENABLED } from "@/config/features";
+import { toast } from "sonner";
 import Splash from "./pages/Splash";
 import Welcome from "./pages/Welcome";
 import DriverEntry from "./pages/DriverEntry";
@@ -69,6 +71,19 @@ function AppContent() {
   const location = useLocation();
   const { isAuthenticated } = useAuth();
   const { requests } = useRequests();
+  useEffect(() => {
+    const toastId = 'motofix-api-retry';
+    const handleRetryState = (event: Event) => {
+      const active = (event as CustomEvent<{ active: boolean }>).detail.active;
+      if (active) {
+        toast.loading('Server is waking up, one moment', { id: toastId, duration: Infinity });
+      } else {
+        toast.dismiss(toastId);
+      }
+    };
+    window.addEventListener('motofix:api-retry', handleRetryState);
+    return () => window.removeEventListener('motofix:api-retry', handleRetryState);
+  }, []);
   useFcmToken(isAuthenticated);
   // Never fire reminder pop-ups on public/auth screens (splash, welcome, login,
   // signup, verifying, onboarding) — even if a stale token leaves isAuthenticated true.

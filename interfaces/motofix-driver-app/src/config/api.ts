@@ -20,6 +20,31 @@ import axios from 'axios';
 import { noteServerDate } from '@/utils/serverClock';
 import { debugLog } from '@/utils/debug';
 
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    __networkRetryCount?: number;
+    __networkRetryNoticeActive?: boolean;
+  }
+}
+
+let activeNetworkRetryRequests = 0;
+
+function setNetworkRetryNotice(config: axios.InternalAxiosRequestConfig, active: boolean) {
+  if (
+    config.__networkRetryNoticeActive === active ||
+    (!active && !config.__networkRetryNoticeActive)
+  ) return;
+  config.__networkRetryNoticeActive = active;
+  activeNetworkRetryRequests = Math.max(0, activeNetworkRetryRequests + (active ? 1 : -1));
+  window.dispatchEvent(new CustomEvent('motofix:api-retry', {
+    detail: { active: activeNetworkRetryRequests > 0 },
+  }));
+}
+
+function isNetworkFailure(error: unknown): error is import('axios').AxiosError {
+  return axios.isAxiosError(error) && !error.response && error.code !== 'ERR_CANCELED';
+}
+
 // Local development continues to use the Vite proxy. Production builds require
 // VITE_API_AUTH_URL and validate it in vite.config.ts before bundling.
 const serviceUrl = (configured: string | undefined, productionUrl: string) =>
@@ -133,12 +158,24 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
 
   instance.interceptors.response.use(
     (response) => {
+      setNetworkRetryNotice(response.config, false);
       // Keep the device's clock in step with the server (for the journey sim).
       noteServerDate(response.headers?.['date']);
       debugLog(`📥 Response from ${response.config.url}:`, response.status);
       return response;
     },
     (error) => {
+      const config = axios.isAxiosError(error) ? error.config : undefined;
+      const retryCount = config?.__networkRetryCount ?? 0;
+      if (config && isNetworkFailure(error) && retryCount < 2) {
+        config.__networkRetryCount = retryCount + 1;
+        setNetworkRetryNotice(config, true);
+        debugLog(`[api] Network request failed; retry ${retryCount + 1}/2 scheduled.`);
+        const delay = retryCount === 0 ? 3_000 : 8_000;
+        return new Promise((resolve) => setTimeout(resolve, delay))
+          .then(() => instance.request(config));
+      }
+      if (config) setNetworkRetryNotice(config, false);
       console.error('❌ Response error:', {
         status: error.response?.status,
         url: error.config?.url,
@@ -192,30 +229,14 @@ export function getAuthErrorMessage(error: unknown): string {
   return error.message || 'Server error, please try again';
 }
 
-function isRetryableOtpFailure(error: unknown): boolean {
-  return axios.isAxiosError(error) && (
-    error.code === 'ECONNABORTED' ||
-    error.code === 'ETIMEDOUT' ||
-    error.code === 'ERR_NETWORK' ||
-    (!error.response && error.code !== 'ERR_CANCELED')
-  );
-}
-
 // Auth API functions
 export const authService = {
-  sendOtp: (phone: string, fullName?: string, numberPlate?: string) => {
-    const send = () => authApi.post('/auth/register/driver', {
+  sendOtp: (phone: string, fullName?: string, numberPlate?: string) =>
+    authApi.post('/auth/register/driver', {
         phone,
         ...(fullName    ? { full_name:    fullName }                         : {}),
         ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
-      }, { timeout: 60_000 });
-
-    return send().catch((error: unknown) => {
-      if (!isRetryableOtpFailure(error)) throw error;
-      console.warn('[auth] OTP request failed without a response or timed out; retrying once.');
-      return send();
-    });
-  },
+      }, { timeout: 60_000 }),
 
   login: (phone: string, otp: string) =>
     authApi.post('/auth/verify-otp', {

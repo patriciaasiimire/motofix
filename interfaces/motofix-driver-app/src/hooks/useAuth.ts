@@ -67,7 +67,7 @@ function useAuthState() {
    * This ensures token is valid and gets fresh user data
    * Includes retry logic for network failures
    */
-  const checkAuth = useCallback(async (retryCount = 0, maxRetries = 2) => {
+  const checkAuth = useCallback(async () => {
     // Prevent concurrent auth checks
     if (authCheckInProgressRef.current) {
       debugLog('⏳ Auth check already in progress, skipping...');
@@ -90,32 +90,16 @@ function useAuthState() {
       }
 
       debugLog('✅ Token found, verifying with /auth/me...');
-      try {
-        // Call /auth/me to verify token and get fresh user data
-        const response = await authService.getMe();
-        const userData = response.data;
-        
-        debugLog('✅ Auth verification succeeded');
-        setUser(userData);
-        setIsAuthenticated(true);
-        // Update localStorage with fresh user data
-        localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(userData));
-        localStorage.setItem(STORAGE_LAST_AUTH_CHECK, Date.now().toString());
-      } catch (error: unknown) {
-        // If network error and retries available, retry
-        if (
-          axios.isAxiosError(error) &&
-          (error.code === 'ECONNABORTED' || error.message === 'Network Error') &&
-          retryCount < maxRetries
-        ) {
-          debugLog(`⚠️ Network error, retrying... (${retryCount + 1}/${maxRetries})`);
-          // Wait 2 seconds before retrying
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          authCheckInProgressRef.current = false;
-          return checkAuth(retryCount + 1, maxRetries);
-        }
-        throw error;
-      }
+      // Call /auth/me to verify token and get fresh user data. Network retries
+      // are centralized in the shared Axios clients.
+      const response = await authService.getMe();
+      const userData = response.data;
+
+      debugLog('✅ Auth verification succeeded');
+      setUser(userData);
+      setIsAuthenticated(true);
+      localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(userData));
+      localStorage.setItem(STORAGE_LAST_AUTH_CHECK, Date.now().toString());
     } catch (error: unknown) {
       console.error(
         '❌ Auth check failed:',

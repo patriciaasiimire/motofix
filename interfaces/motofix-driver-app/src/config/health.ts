@@ -4,7 +4,14 @@
 // and you want to confirm the backend is reachable; results are printed to the console.
 
 import axios from 'axios';
-import { AUTH_BASE_URL, REQUESTS_BASE_URL, authService, getAuthErrorMessage } from './api';
+import {
+  AUTH_BASE_URL,
+  REQUESTS_BASE_URL,
+  authApi,
+  authService,
+  getAuthErrorMessage,
+  requestsApi,
+} from './api';
 import { debugLog } from '@/utils/debug';
 
 export async function checkServiceHealth() {
@@ -18,7 +25,7 @@ export async function checkServiceHealth() {
   // Check Auth Service
   try {
     debugLog('🔍 Checking Auth Service:', AUTH_BASE_URL);
-    const response = await axios.get(`${AUTH_BASE_URL}/health`, { timeout: 5000 });
+    const response = await authApi.get('/health', { timeout: 5000 });
     services.auth.healthy = response.status === 200;
     debugLog('✅ Auth Service is healthy');
   } catch (error: unknown) {
@@ -29,7 +36,7 @@ export async function checkServiceHealth() {
   // Check Requests Service
   try {
     debugLog('🔍 Checking Requests Service:', REQUESTS_BASE_URL);
-    const response = await axios.get(`${REQUESTS_BASE_URL}/health`, { timeout: 5000 });
+    const response = await requestsApi.get('/health', { timeout: 5000 });
     services.requests.healthy = response.status === 200;
     debugLog('✅ Requests Service is healthy');
   } catch (error: unknown) {
