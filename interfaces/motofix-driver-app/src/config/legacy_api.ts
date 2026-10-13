@@ -4,6 +4,7 @@
 // confirmed nothing still imports it.
 
 import axios from "axios";
+import { debugLog } from "@/utils/debug";
 
 // Base URLs for microservices
 export const AUTH_BASE_URL = import.meta.env.VITE_API_AUTH_URL ?? "";
@@ -11,7 +12,7 @@ export const REQUESTS_BASE_URL = import.meta.env.VITE_API_REQUESTS_URL || "https
 export const PAYMENTS_BASE_URL = import.meta.env.VITE_API_PAYMENTS_URL || "https://motofix-payments-service.onrender.com";
 
 // Add startup logging
-console.log("🚀 Initializing Motofix API:", {
+debugLog("🚀 Initializing Motofix API:", {
   AUTH_BASE_URL,
   REQUESTS_BASE_URL,
   PAYMENTS_BASE_URL,
@@ -58,9 +59,8 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
       if (typeof FormData !== "undefined" && config.data instanceof FormData) {
         delete config.headers["Content-Type"];
       }
-      console.log(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
+      debugLog(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
         hasToken: !!token,
-        headers: config.headers,
       });
       return config;
     },
@@ -72,7 +72,7 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
 
   instance.interceptors.response.use(
     (response) => {
-      console.log(`📥 Response from ${response.config.url}:`, response.status, response.data);
+      debugLog(`📥 Response from ${response.config.url}:`, response.status);
       return response;
     },
     (error) => {

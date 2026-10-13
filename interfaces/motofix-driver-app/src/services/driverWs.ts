@@ -2,6 +2,7 @@
 // Production-ready WebSocket client for real-time request status updates
 
 import { WS_URL } from '@/config/api';
+import { debugLog } from '@/utils/debug';
 
 export interface WsPayload {
   type: string;
@@ -59,7 +60,7 @@ export function createRequestsWs(
     ws.onopen = () => {
       retryCount = 0;
       loggedUnavailable = false;
-      console.log('[WS] connected');
+      debugLog('[WS] connected');
       onConnect?.();
     };
 

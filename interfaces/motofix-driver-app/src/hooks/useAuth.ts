@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { authService } from '@/config/api';
+import { debugLog } from '@/utils/debug';
 
 const STORAGE_SETTINGS_KEY = 'motofix_settings';
 
@@ -68,7 +69,7 @@ export function useAuth() {
   const checkAuth = useCallback(async (retryCount = 0, maxRetries = 2) => {
     // Prevent concurrent auth checks
     if (authCheckInProgressRef.current) {
-      console.log('⏳ Auth check already in progress, skipping...');
+      debugLog('⏳ Auth check already in progress, skipping...');
       return;
     }
 
@@ -77,23 +78,23 @@ export function useAuth() {
       
       // Check if token exists in localStorage
       const token = localStorage.getItem(STORAGE_TOKEN_KEY);
-      console.log('🔍 checkAuth: token exists?', !!token);
+      debugLog('🔍 checkAuth: token exists?', !!token);
       
       if (!token) {
-        console.log('❌ No token found - not authenticated');
+        debugLog('❌ No token found - not authenticated');
         setIsAuthenticated(false);
         setUser(null);
         setIsLoading(false);
         return;
       }
 
-      console.log('✅ Token found, verifying with /auth/me...');
+      debugLog('✅ Token found, verifying with /auth/me...');
       try {
         // Call /auth/me to verify token and get fresh user data
         const response = await authService.getMe();
         const userData = response.data;
         
-        console.log('✅ Auth verification succeeded');
+        debugLog('✅ Auth verification succeeded');
         setUser(userData);
         setIsAuthenticated(true);
         // Update localStorage with fresh user data
@@ -102,7 +103,7 @@ export function useAuth() {
       } catch (error: any) {
         // If network error and retries available, retry
         if ((error.code === 'ECONNABORTED' || error.message === 'Network Error') && retryCount < maxRetries) {
-          console.log(`⚠️ Network error, retrying... (${retryCount + 1}/${maxRetries})`);
+          debugLog(`⚠️ Network error, retrying... (${retryCount + 1}/${maxRetries})`);
           // Wait 2 seconds before retrying
           await new Promise(resolve => setTimeout(resolve, 2000));
           authCheckInProgressRef.current = false;
@@ -115,13 +116,13 @@ export function useAuth() {
       
       // Verification failures never end the local session; only explicit logout
       // or clearing browser storage removes the saved credentials.
-      console.log('⚠️ Auth check failed but keeping cached session:', error?.message);
+      debugLog('⚠️ Auth check failed but keeping cached session:', error?.message);
       const storedUser = localStorage.getItem(STORAGE_USER_KEY);
       if (storedUser) {
         try {
           setUser(JSON.parse(storedUser));
           setIsAuthenticated(true);
-          console.log('✅ Using cached user session');
+          debugLog('✅ Using cached user session');
         } catch (e) {
           console.error('Failed to parse cached user', e);
         }
@@ -137,13 +138,13 @@ export function useAuth() {
    * This enables persistent login across page reloads
    */
   useEffect(() => {
-    console.log('📱 useAuth mounted - checking for existing session...');
+    debugLog('📱 useAuth mounted - checking for existing session...');
     
     // Load from localStorage first for instant UI (avoid flash/flicker)
     const storedToken = localStorage.getItem(STORAGE_TOKEN_KEY);
     const storedUser = localStorage.getItem(STORAGE_USER_KEY);
     
-    console.log('🔍 localStorage check: token?', !!storedToken, 'user?', !!storedUser);
+    debugLog('🔍 localStorage check: token?', !!storedToken, 'user?', !!storedUser);
     
     if (storedToken && storedUser) {
       try {
@@ -156,13 +157,13 @@ export function useAuth() {
         localStorage.removeItem(STORAGE_USER_KEY);
       }
     } else {
-      console.log('ℹ️ No cached user found');
+      debugLog('ℹ️ No cached user found');
       setIsLoading(false);
     }
 
     // Always verify with server (even if we have cached data)
     // This ensures token is still valid and gets fresh user info
-    console.log('🔄 Starting server verification...');
+    debugLog('🔄 Starting server verification...');
     checkAuth();
 
     // Cleanup
@@ -181,13 +182,13 @@ export function useAuth() {
    */
   const login = async (phone: string, otp: string, fullName?: string) => {
     try {
-      console.log('🔐 Attempting login with phone:', phone);
+      debugLog('🔐 Attempting login with phone:', phone);
       const response = await authService.login(phone, otp, fullName);
 
       // Backend returns: { access_token, user }
       const { access_token, user: userData } = response.data;
       
-      console.log('✅ Login successful');
+      debugLog('✅ Login successful');
       // Save JWT token to localStorage
       // axios interceptor will automatically include it in all API requests
       if (access_token) {
@@ -197,7 +198,7 @@ export function useAuth() {
 
       // Persist user info for instant UI
       localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(userData));
-      console.log('✅ User saved to localStorage');
+      debugLog('✅ User saved to localStorage');
 
       sessionStorage.removeItem('motofix_driver_greeting');  // fresh home-screen headline each login
 
@@ -222,12 +223,12 @@ export function useAuth() {
    * Calls /auth/logout on server to clear httpOnly cookie
    */
   const logout = () => {
-    console.log('🚪 Logout initiated');
+    debugLog('🚪 Logout initiated');
     // Clear localStorage
     localStorage.removeItem(STORAGE_TOKEN_KEY);
     localStorage.removeItem(STORAGE_USER_KEY);
     localStorage.removeItem(STORAGE_LAST_AUTH_CHECK);
-    console.log('✅ localStorage cleared');
+    debugLog('✅ localStorage cleared');
     
     // Clear state
     setUser(null);

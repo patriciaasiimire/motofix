@@ -18,6 +18,7 @@
 
 import axios from 'axios';
 import { noteServerDate } from '@/utils/serverClock';
+import { debugLog } from '@/utils/debug';
 
 // Local development continues to use the Vite proxy. Production builds require
 // VITE_API_AUTH_URL and validate it in vite.config.ts before bundling.
@@ -50,7 +51,7 @@ const requestsWsBase = REQUESTS_BASE_URL.replace(/^https:/, 'wss:').replace(/^ht
 export const WS_URL = import.meta.env.VITE_WS_URL || (requestsWsBase ? `${requestsWsBase}/ws/jobs` : '');
 
 // Add startup logging
-console.log('🚀 Initializing Motofix API:', {
+debugLog('🚀 Initializing Motofix API:', {
   AUTH_BASE_URL,
   REQUESTS_BASE_URL,
   PAYMENTS_BASE_URL,
@@ -119,9 +120,8 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
       if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
         delete config.headers['Content-Type'];
       }
-      console.log(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
+      debugLog(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
         hasToken: !!token,
-        headers: config.headers,
       });
       return config;
     },
@@ -135,7 +135,7 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
     (response) => {
       // Keep the device's clock in step with the server (for the journey sim).
       noteServerDate(response.headers?.['date']);
-      console.log(`📥 Response from ${response.config.url}:`, response.status);
+      debugLog(`📥 Response from ${response.config.url}:`, response.status);
       return response;
     },
     (error) => {

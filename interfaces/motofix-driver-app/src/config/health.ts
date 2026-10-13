@@ -5,9 +5,10 @@
 
 import axios from 'axios';
 import { AUTH_BASE_URL, REQUESTS_BASE_URL, authService, getAuthErrorMessage } from './api';
+import { debugLog } from '@/utils/debug';
 
 export async function checkServiceHealth() {
-  console.log('🏥 Checking Motofix services health...');
+  debugLog('🏥 Checking Motofix services health...');
   
   const services = {
     auth: { url: AUTH_BASE_URL, healthy: false, error: '' },
@@ -16,10 +17,10 @@ export async function checkServiceHealth() {
 
   // Check Auth Service
   try {
-    console.log('🔍 Checking Auth Service:', AUTH_BASE_URL);
+    debugLog('🔍 Checking Auth Service:', AUTH_BASE_URL);
     const response = await axios.get(`${AUTH_BASE_URL}/health`, { timeout: 5000 });
     services.auth.healthy = response.status === 200;
-    console.log('✅ Auth Service is healthy');
+    debugLog('✅ Auth Service is healthy');
   } catch (error: unknown) {
     services.auth.error = error instanceof Error ? error.message : String(error);
     console.warn('⚠️ Auth Service check failed:', services.auth.error);
@@ -27,25 +28,25 @@ export async function checkServiceHealth() {
 
   // Check Requests Service
   try {
-    console.log('🔍 Checking Requests Service:', REQUESTS_BASE_URL);
+    debugLog('🔍 Checking Requests Service:', REQUESTS_BASE_URL);
     const response = await axios.get(`${REQUESTS_BASE_URL}/health`, { timeout: 5000 });
     services.requests.healthy = response.status === 200;
-    console.log('✅ Requests Service is healthy');
+    debugLog('✅ Requests Service is healthy');
   } catch (error: unknown) {
     services.requests.error = error instanceof Error ? error.message : String(error);
     console.warn('⚠️ Requests Service check failed:', services.requests.error);
   }
 
-  console.log('📊 Health Check Results:', services);
+  debugLog('📊 Health Check Results:', services);
   return services;
 }
 
 export async function testAuthEndpoint(phone: string) {
-  console.log('🧪 Testing Auth endpoint with phone:', phone);
+  debugLog('🧪 Testing Auth endpoint with phone:', phone);
   
   try {
     const response = await authService.sendOtp(phone);
-    console.log('✅ Auth endpoint test successful:', response.status);
+    debugLog('✅ Auth endpoint test successful:', response.status);
     return { success: true, status: response.status };
   } catch (error: unknown) {
     const status = axios.isAxiosError(error) ? error.response?.status : undefined;
