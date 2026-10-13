@@ -135,7 +135,7 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
     (response) => {
       // Keep the device's clock in step with the server (for the journey sim).
       noteServerDate(response.headers?.['date']);
-      console.log(`📥 Response from ${response.config.url}:`, response.status, response.data);
+      console.log(`📥 Response from ${response.config.url}:`, response.status);
       return response;
     },
     (error) => {

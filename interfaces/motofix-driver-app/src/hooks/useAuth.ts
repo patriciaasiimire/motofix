@@ -93,7 +93,7 @@ export function useAuth() {
         const response = await authService.getMe();
         const userData = response.data;
         
-        console.log('✅ Auth verification succeeded:', userData);
+        console.log('✅ Auth verification succeeded');
         setUser(userData);
         setIsAuthenticated(true);
         // Update localStorage with fresh user data
@@ -148,7 +148,6 @@ export function useAuth() {
     if (storedToken && storedUser) {
       try {
         const parsedUser = JSON.parse(storedUser);
-        console.log('✅ Loaded cached user:', parsedUser);
         setUser(parsedUser);
         setIsAuthenticated(true);
         setIsLoading(false);
@@ -189,14 +188,11 @@ export function useAuth() {
       const { access_token, user: userData } = response.data;
       
       console.log('✅ Login successful');
-      console.log('💾 Saving token to localStorage');
-
       // Save JWT token to localStorage
       // axios interceptor will automatically include it in all API requests
       if (access_token) {
         localStorage.setItem(STORAGE_TOKEN_KEY, access_token);
         localStorage.setItem(STORAGE_LAST_AUTH_CHECK, Date.now().toString());
-        console.log('✅ Token saved:', access_token.substring(0, 20) + '...');
       }
 
       // Persist user info for instant UI
