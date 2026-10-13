@@ -25,7 +25,7 @@ import { NetworkBanner } from "@/components/NetworkBanner";
 import { RequestProvider, useRequests } from "@/contexts/RequestContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
-import { useAuth } from "@/hooks/useAuth";
+import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { useFcmToken } from "@/hooks/useFcmToken";
 import { useReminderScheduler } from "@/hooks/useReminderScheduler";
 import { MOTOBOT_ENABLED } from "@/config/features";
@@ -333,11 +333,13 @@ const App = () => (
       />
       <AppRouter>
         <ThemeProvider>
-          <WebSocketProvider>
-            <RequestProvider>
-              <AppContent />
-            </RequestProvider>
-          </WebSocketProvider>
+          <AuthProvider>
+            <WebSocketProvider>
+              <RequestProvider>
+                <AppContent />
+              </RequestProvider>
+            </WebSocketProvider>
+          </AuthProvider>
         </ThemeProvider>
       </AppRouter>
     </TooltipProvider>

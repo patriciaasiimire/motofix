@@ -8,7 +8,9 @@
 // fire a 'motofix:auth-changed' event
 // so other parts of the app (requests, websocket) can react.
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import type { ReactNode } from 'react';
+import axios from 'axios';
 import { authService } from '@/config/api';
 import { debugLog } from '@/utils/debug';
 
@@ -50,7 +52,7 @@ const getStoredUser = (): User | null => {
  * Provides robust persistent login using localStorage + httpOnly cookies
  * Auto-checks auth on app load via /auth/me endpoint
  */
-export function useAuth() {
+function useAuthState() {
   const [user, setUser] = useState<User | null>(() => getStoredUser());
   const [isLoading, setIsLoading] = useState(() => {
     return !localStorage.getItem(STORAGE_TOKEN_KEY);
@@ -59,7 +61,6 @@ export function useAuth() {
     return !!localStorage.getItem(STORAGE_TOKEN_KEY);
   });
   const authCheckInProgressRef = useRef(false);
-  const authCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   /**
    * Verify token with server by calling /auth/me
@@ -100,9 +101,13 @@ export function useAuth() {
         // Update localStorage with fresh user data
         localStorage.setItem(STORAGE_USER_KEY, JSON.stringify(userData));
         localStorage.setItem(STORAGE_LAST_AUTH_CHECK, Date.now().toString());
-      } catch (error: any) {
+      } catch (error: unknown) {
         // If network error and retries available, retry
-        if ((error.code === 'ECONNABORTED' || error.message === 'Network Error') && retryCount < maxRetries) {
+        if (
+          axios.isAxiosError(error) &&
+          (error.code === 'ECONNABORTED' || error.message === 'Network Error') &&
+          retryCount < maxRetries
+        ) {
           debugLog(`⚠️ Network error, retrying... (${retryCount + 1}/${maxRetries})`);
           // Wait 2 seconds before retrying
           await new Promise(resolve => setTimeout(resolve, 2000));
@@ -111,12 +116,19 @@ export function useAuth() {
         }
         throw error;
       }
-    } catch (error: any) {
-      console.error('❌ Auth check failed:', error?.response?.status, error?.message);
+    } catch (error: unknown) {
+      console.error(
+        '❌ Auth check failed:',
+        axios.isAxiosError(error) ? error.response?.status : undefined,
+        error instanceof Error ? error.message : String(error),
+      );
       
       // Verification failures never end the local session; only explicit logout
       // or clearing browser storage removes the saved credentials.
-      debugLog('⚠️ Auth check failed but keeping cached session:', error?.message);
+      debugLog(
+        '⚠️ Auth check failed but keeping cached session:',
+        error instanceof Error ? error.message : String(error),
+      );
       const storedUser = localStorage.getItem(STORAGE_USER_KEY);
       if (storedUser) {
         try {
@@ -166,13 +178,7 @@ export function useAuth() {
     debugLog('🔄 Starting server verification...');
     checkAuth();
 
-    // Cleanup
-    return () => {
-      if (authCheckTimeoutRef.current) {
-        clearTimeout(authCheckTimeoutRef.current);
-      }
-    };
-  }, []); // Empty dependency array - run only once on mount
+  }, [checkAuth]);
 
   /**
    * Handle login: send OTP and receive JWT token
@@ -249,4 +255,18 @@ export function useAuth() {
     logout,
     checkAuth, // For manual auth checks if needed
   };
+}
+
+type AuthContextValue = ReturnType<typeof useAuthState>;
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const auth = useAuthState();
+  return createElement(AuthContext.Provider, { value: auth }, children);
+}
+
+export function useAuth(): AuthContextValue {
+  const auth = useContext(AuthContext);
+  if (!auth) throw new Error('useAuth must be used inside AuthProvider');
+  return auth;
 }
