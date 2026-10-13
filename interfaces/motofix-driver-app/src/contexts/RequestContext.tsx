@@ -9,8 +9,8 @@
 //      accepted, is en route, moved on the map, finished). Handled in the WS effect.
 //   2. REST fetch — fetchAll() pulls the full list from the server (on load, on login
 //      change, and after each WS event) as the reliable snapshot.
-//   3. Polling fallback — if the WebSocket never connects within 15s, we poll every
-//      10s instead, so updates still arrive on a bad connection.
+//   3. Polling fallback — while a request is active and WebSocket is unavailable,
+//      refresh the request list every 15s (only while the page is visible).
 //
 // Two subtleties worth knowing:
 //   • "Optimistic cancel": when the driver cancels, we flip the status locally right
@@ -132,7 +132,6 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
 
   const previousStatusesRef  = useRef<Map<string, string>>(new Map());
   const localCancelledRef    = useRef(new Set<string>());
-  const wsEverConnected = useRef(false);
   const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quoteCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsSendRef = useRef<((data: object) => void) | null>(null);
@@ -356,7 +355,6 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       },
       () => {
         setIsWsConnected(true);
-        wsEverConnected.current = true;
         if (fallbackPollRef.current) {
           clearInterval(fallbackPollRef.current);
           fallbackPollRef.current = null;
@@ -374,35 +372,27 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     };
   }, [fetchAll]);
 
-  // Polling fallback — only runs if WS never connected after 15s
+  const hasLiveRequest = requests.some(r => r.status !== 'completed' && r.status !== 'cancelled');
+
+  // Refresh the request list only while work is active and the socket is down.
   useEffect(() => {
-    const check = setTimeout(() => {
-      if (!wsEverConnected.current) {
-        // Start 10-second polling as fallback
-        fallbackPollRef.current = setInterval(() => fetchAll(false), 10_000);
-      }
-    }, 15_000);
+    if (isWsConnected || !hasLiveRequest) return;
+    const poll = () => {
+      if (document.visibilityState === 'visible') void fetchAll(false);
+    };
+    fallbackPollRef.current = setInterval(poll, 15_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') poll();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
-      clearTimeout(check);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       if (fallbackPollRef.current) {
         clearInterval(fallbackPollRef.current);
         fallbackPollRef.current = null;
       }
     };
-  }, [fetchAll]);
-
-  // Active-request watchdog (mirror of the mechanic app's). The WebSocket already pushes
-  // a mechanic cancellation instantly; this is the BACKUP for when that event is missed
-  // (socket drop / app backgrounded): while any request is still live we re-fetch on a
-  // steady cadence, so the cancellation lands within ~10s regardless of the socket. The
-  // status-change toast ("Your mechanic cancelled this request") fires from applyUpdates,
-  // and previousStatusesRef dedupes it so the WS and this poll can't double-notify.
-  const hasLiveRequest = requests.some(r => r.status !== 'completed' && r.status !== 'cancelled');
-  useEffect(() => {
-    if (!hasLiveRequest) return;
-    const interval = setInterval(() => fetchAll(false), 10_000);
-    return () => clearInterval(interval);
-  }, [hasLiveRequest, fetchAll]);
+  }, [fetchAll, hasLiveRequest, isWsConnected]);
 
   const refresh = useCallback(() => fetchAll(false), [fetchAll]);
 

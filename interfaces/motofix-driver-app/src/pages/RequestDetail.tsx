@@ -584,7 +584,8 @@ function ConfirmJobCard({ onConfirm, onDecline }: { onConfirm: () => Promise<voi
 export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { requests, paymentsEnabled, sendWsMessage, markCancelled, revertCancelled } = useRequests();
+  const { requests, paymentsEnabled, isWsConnected, sendWsMessage, markCancelled, revertCancelled } = useRequests();
+  const loadedRequestIdRef = useRef<string | null>(null);
 
   const [request, setRequest] = useState<Request | null>(null);
   const [matchedMechanics, setMatchedMechanics] = useState<RequestMechanicMatch[]>([]);
@@ -729,9 +730,10 @@ export default function RequestDetail() {
 
   // ── Load request ──────────────────────────────────────────────────────────
   useEffect(() => {
+    if (!id || loadedRequestIdRef.current === id) return;
+    loadedRequestIdRef.current = id;
     const cached = normalizeRequest(requests.find((r) => String(r.id) === id));
     if (cached) { setRequest(cached); setIsLoading(false); }
-    if (!id) return;
     requestsService.getById(id)
       .then((res) => {
         setRequest(normalizeRequest(res.data));
@@ -739,6 +741,27 @@ export default function RequestDetail() {
       })
       .catch(() => { if (!cached) setIsLoading(false); });
   }, [id, requests]);
+
+  useEffect(() => {
+    const requestStatus = request?.status;
+    if (!id || !requestStatus || isWsConnected || ['completed', 'cancelled'].includes(requestStatus)) return;
+
+    const refreshActiveRequest = () => {
+      if (document.visibilityState !== 'visible') return;
+      requestsService.getById(id)
+        .then((res) => setRequest(normalizeRequest(res.data)))
+        .catch((error: unknown) => console.error('[dispatch] Could not refresh active request.', error));
+    };
+    const interval = setInterval(refreshActiveRequest, 10_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshActiveRequest();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [id, requestStatus, isWsConnected]);
 
   const loadMatches = useCallback(async () => {
     if (!id) return;
