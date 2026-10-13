@@ -86,6 +86,7 @@ interface RequestContextValue {
   isLoading: boolean;
   error: string | null;
   isWsConnected: boolean;
+  isWsPaused: boolean;
   refresh: () => Promise<void>;
   markCancelled: (id: string) => void;
   revertCancelled: (id: string) => void;
@@ -125,6 +126,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isWsConnected, setIsWsConnected] = useState(false);
+  const [isWsPaused, setIsWsPaused] = useState(false);
   const [featureFlagsLoaded, setFeatureFlagsLoaded] = useState(false);
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [pendingQuote, setPendingQuote] = useState<QuoteRecord | null>(null);
@@ -363,6 +365,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       () => {
         setIsWsConnected(false);
       },
+      setIsWsPaused,
     );
 
     wsSendRef.current = send;
@@ -434,6 +437,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       error,
       isWsConnected,
+      isWsPaused,
       refresh,
       markCancelled,
       revertCancelled,

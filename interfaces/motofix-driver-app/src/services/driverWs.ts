@@ -30,6 +30,7 @@ export function createRequestsWs(
   onMessage: (payload: WsPayload) => void,
   onConnect?: () => void,
   onDisconnect?: () => void,
+  onPaused?: (paused: boolean) => void,
 ): { stop: () => void; send: (data: object) => void } {
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -60,6 +61,7 @@ export function createRequestsWs(
     ws.onopen = () => {
       retryCount = 0;
       loggedUnavailable = false;
+      onPaused?.(false);
       debugLog('[WS] connected');
       onConnect?.();
     };
@@ -96,6 +98,7 @@ export function createRequestsWs(
         console.error(`[WS] Stopped reconnecting after ${maxReconnectAttempts} failed attempts.`);
         loggedUnavailable = true;
       }
+      onPaused?.(true);
       return;
     }
     // Exponential backoff: 1s, 2s, 4s … capped at 30s
@@ -113,6 +116,7 @@ export function createRequestsWs(
     }
     ws = null;
     retryCount = 0;
+    onPaused?.(false);
     if (localStorage.getItem('motofix_token')) connect();
     else onDisconnect?.();
   };
