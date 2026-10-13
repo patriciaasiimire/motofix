@@ -107,6 +107,7 @@ jobs:
             echo "::error::Vite build did not create dist/index.html."
             exit 1
           }
+          ls -la dist
           echo "Vite output exists: $(find dist -type f | wc -l) files in dist/." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate Android project if missing
@@ -125,6 +126,9 @@ jobs:
             echo "::error::Capacitor could not sync the Android project. Check the app build output and Capacitor configuration."
             exit 1
           }
+
+      - name: Verify Capacitor copied web assets
+        run: |
           test -s android/app/src/main/assets/public/index.html || {
             echo "::error::Capacitor did not copy dist/index.html into the Android web assets."
             exit 1
@@ -149,11 +153,17 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
-        if: github.event_name == 'push' || inputs.build_type == 'debug'
         run: |
           chmod +x android/gradlew
-          cd android
-          ./gradlew assembleDebug
+          cd android && ./gradlew assembleDebug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: motofix-driver-debug-apk
+          path: interfaces/motofix-driver-app/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Decode release keystore
         if: github.event_name == 'workflow_dispatch' && inputs.build_type == 'release'
@@ -187,15 +197,6 @@ jobs:
             -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
             -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
-
-      - name: Upload debug APK
-        if: github.event_name == 'push' || inputs.build_type == 'debug'
-        uses: actions/upload-artifact@v4
-        with:
-          name: motofix-driver-debug-apk
-          path: interfaces/motofix-driver-app/android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Upload release APK and AAB
         if: github.event_name == 'workflow_dispatch' && inputs.build_type == 'release'

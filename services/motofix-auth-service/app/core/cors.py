@@ -26,6 +26,9 @@ def _origin_allowed(origin: str | None) -> bool:
 # Production-safe allowed origins - NO wildcards
 ALLOWED_ORIGINS = [
     "https://motofixug.netlify.app",   # Production V1 driver web app
+    "https://localhost",               # Capacitor Android WebView
+    "capacitor://localhost",            # Capacitor legacy/custom WebView origin
+    "http://localhost",                 # Capacitor development WebView
     "https://customer.motofix.org",      # Primary customer/driver app
     "https://admin.motofix.org",         # Admin dashboard
     "https://motofix.org",               # Main domain
@@ -82,7 +85,7 @@ def setup_cors(app: FastAPI) -> None:
     - Explicit origin allowlist (no wildcards)
     - Credentials enabled for secure cookies/auth
     - OPTIONS preflight always allowed
-    - Explicit header allowlist (Content-Type, Authorization)
+    - Explicit header allowlist for JSON, auth, and browser requests
     - All HTTP methods supported
     
     Args:
@@ -96,7 +99,8 @@ def setup_cors(app: FastAPI) -> None:
         allow_origin_regex=LAN_ORIGIN_REGEX.pattern,  # plus any local-network origin
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization"],
+        allow_headers=["Content-Type", "Authorization", "Accept", "X-Requested-With"],
+        expose_headers=["Authorization"],
         max_age=3600,  # Cache preflight responses for 1 hour
     )
     
@@ -119,7 +123,8 @@ def setup_cors(app: FastAPI) -> None:
                         "Access-Control-Allow-Origin": origin,
                         "Access-Control-Allow-Credentials": "true",
                         "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-                        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+                        "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, X-Requested-With",
+                        "Access-Control-Expose-Headers": "Authorization",
                         "Access-Control-Max-Age": "3600",
                     },
                 )
@@ -129,7 +134,8 @@ def setup_cors(app: FastAPI) -> None:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Accept, X-Requested-With"
+            response.headers["Access-Control-Expose-Headers"] = "Authorization"
             return response
         
         # Origin not allowed - pass through without CORS headers (browser will block)
@@ -142,6 +148,7 @@ def setup_cors(app: FastAPI) -> None:
     for origin in ALLOWED_ORIGINS:
         logger.info(f"  • {origin}")
     logger.info("Allowed Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS")
-    logger.info("Allowed Headers: Content-Type, Authorization")
+    logger.info("Allowed Headers: Content-Type, Authorization, Accept, X-Requested-With")
+    logger.info("Exposed Headers: Authorization")
     logger.info("Credentials: Enabled (httpOnly cookies + Bearer tokens)")
     logger.info("=" * 70)

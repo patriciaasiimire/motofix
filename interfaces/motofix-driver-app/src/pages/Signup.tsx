@@ -6,8 +6,9 @@ import { useNavigate } from "react-router-dom";
 import { User, Phone, Car, ArrowRight, ArrowLeft, Loader2, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { authService } from "@/config/api";
+import { authService, getAuthErrorMessage } from "@/config/api";
 import { toast } from "sonner";
+import axios from "axios";
 
 type Phase = "form" | "otp";
 
@@ -88,8 +89,8 @@ export default function Signup() {
       let res;
       try {
         res = await authService.resendOtp(phone);
-      } catch (resendErr: any) {
-        if (resendErr.response?.status === 404) {
+      } catch (resendErr: unknown) {
+        if (axios.isAxiosError(resendErr) && resendErr.response?.status === 404) {
           res = await authService.sendOtp(phone, fullName, numberPlate || undefined);
         } else {
           throw resendErr;
@@ -97,8 +98,8 @@ export default function Signup() {
       }
       startCooldown();
       toast.success(res.data?.message ?? "New verification code sent", { duration: 5000 });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail?.message || err.message || "Failed to resend code");
+    } catch (err: unknown) {
+      toast.error(getAuthErrorMessage(err));
     } finally {
       setResending(false);
     }
@@ -140,8 +141,8 @@ export default function Signup() {
       setPhase("otp");
       startCooldown();
       toast.success(res.data?.message ?? "Verification code sent", { duration: 5000 });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail?.message || err.message || "Failed to send code");
+    } catch (err: unknown) {
+      toast.error(getAuthErrorMessage(err));
     } finally {
       setLoading(false);
     }

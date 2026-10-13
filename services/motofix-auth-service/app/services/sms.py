@@ -32,12 +32,17 @@ def format_phone(phone: str) -> str:
 def send_sms(phone: str, message: str) -> bool:
     """Send SMS via Africa's Talking REST API; falls back to console log if not configured."""
     formatted = format_phone(phone)
+    masked_phone = formatted[-4:]
 
     if not _AT_API_KEY:
-        logger.info("[SMS-LOG] To %s: %s", formatted, message)
+        logger.warning(
+            "SMS provider skipped for phone ending %s: AT_API_KEY is not configured",
+            masked_phone,
+        )
         return True
 
     try:
+        logger.info("Calling Africa's Talking SMS provider for phone ending %s", masked_phone)
         with httpx.Client(timeout=10) as client:
             resp = client.post(
                 _AT_SMS_URL,
@@ -53,8 +58,8 @@ def send_sms(phone: str, message: str) -> bool:
                 },
             )
         resp.raise_for_status()
-        logger.info("SMS sent to %s: %s", formatted, resp.json())
+        logger.info("SMS provider accepted message for phone ending %s", masked_phone)
         return True
     except Exception as exc:
-        logger.error("SMS send failed to %s: %s", formatted, exc)
+        logger.error("SMS provider call failed for phone ending %s: %s", masked_phone, exc)
         return False

@@ -16,6 +16,7 @@ export function useWebSocket(userId: string | undefined, token: string | null) {
   const mountedRef = useRef(true)
   const retryCountRef = useRef(0)
   const loggedUnavailableRef = useRef(false)
+  const maxReconnectAttempts = 8
 
   const [isConnected, setIsConnected] = useState(false)
   const [lastMessage, setLastMessage] = useState<unknown>(null)
@@ -23,8 +24,15 @@ export function useWebSocket(userId: string | undefined, token: string | null) {
   const connectRef = useRef<() => void>(() => {})
   const scheduleReconnect = useCallback(() => {
     if (!mountedRef.current || !userId || !token) return
+    if (retryCountRef.current >= maxReconnectAttempts) {
+      if (!loggedUnavailableRef.current) {
+        console.error(`[WS] Stopped reconnecting after ${maxReconnectAttempts} failed attempts.`)
+        loggedUnavailableRef.current = true
+      }
+      return
+    }
     const delay = Math.min(1000 * 2 ** retryCountRef.current, 30_000)
-    retryCountRef.current = Math.min(retryCountRef.current + 1, 5)
+    retryCountRef.current += 1
     reconnectRef.current = setTimeout(() => connectRef.current(), delay)
   }, [userId, token])
 
@@ -88,6 +96,8 @@ export function useWebSocket(userId: string | undefined, token: string | null) {
 
   useEffect(() => {
     mountedRef.current = true
+    retryCountRef.current = 0
+    loggedUnavailableRef.current = false
     connect()
     return () => {
       mountedRef.current = false

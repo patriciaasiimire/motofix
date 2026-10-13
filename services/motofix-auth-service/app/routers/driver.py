@@ -138,6 +138,7 @@ async def register_driver(body: DriverRegisterRequest, request: Request, backgro
                         + ("" if existing else " (pending new-driver registration)"),
         )
 
+    logger.info("Generated and stored driver OTP for phone ending %s; queueing SMS delivery", phone[-4:])
     # Deliver the SMS in the background so the response returns immediately and the
     # blocking Africa's Talking HTTP call never stalls the event loop. The OTP is
     # already persisted; if delivery fails the user can resend.
@@ -357,6 +358,7 @@ async def resend_otp(body: PhoneRequest, request: Request, background_tasks: Bac
         await log_event(conn, event_type="otp_resent",
                         description=f"OTP resent to {phone}")
 
+    logger.info("Generated and stored replacement driver OTP for phone ending %s; queueing SMS delivery", phone[-4:])
     background_tasks.add_task(
         send_sms, phone, f"MOTOFIX: Your verification code is {otp}. It expires in 5 minutes."
     )

@@ -6,38 +6,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Phone, KeyRound, ArrowRight, Loader2, ArrowLeft, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { authService } from '@/config/api';
+import { authService, getAuthErrorMessage } from '@/config/api';
 import { toast } from 'sonner';
 import axios from 'axios';
 
 type Step = 'phone' | 'otp';
-
-function extractErrMsg(err: unknown): string {
-  if (!axios.isAxiosError(err)) {
-    return err instanceof Error ? err.message : 'Unable to complete sign-in. Please try again.';
-  }
-
-  const status = err.response?.status;
-  const detail = err.response?.data?.detail;
-  if (status && status >= 500) {
-    return 'The sign-in service is temporarily unavailable. Please try again shortly.';
-  }
-  if (status && status >= 400 && status < 500) {
-    if (typeof detail === 'string') return detail;
-    if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') {
-      return detail.message;
-    }
-    if (Array.isArray(detail) && typeof detail[0]?.msg === 'string') return detail[0].msg;
-    return `The sign-in request was rejected (HTTP ${status}). Check the phone number or try again.`;
-  }
-  if (err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
-    return 'The sign-in service took too long to respond. Please try again.';
-  }
-  if (err.code === 'ERR_NETWORK' || !err.response) {
-    return 'Could not reach the sign-in service. Check your connection; a browser CORS or DNS issue may also prevent access.';
-  }
-  return err.message || 'Unable to complete sign-in. Please try again.';
-}
 
 export default function Login() {
   const [step, setStep]         = useState<Step>('phone');
@@ -92,7 +65,7 @@ export default function Login() {
       const msg: string = res.data?.message ?? '';
       toast.success(msg || 'OTP sent to your phone', { duration: 5000 });
     } catch (err: unknown) {
-      toast.error(extractErrMsg(err));
+      toast.error(getAuthErrorMessage(err));
     } finally { setLoading(false); }
   };
 
@@ -115,7 +88,7 @@ export default function Login() {
       startCooldown();
       toast.success(msg || 'New code sent to your phone', { duration: 5000 });
     } catch (err: unknown) {
-      toast.error(extractErrMsg(err));
+      toast.error(getAuthErrorMessage(err));
     } finally { setResending(false); }
   };
 

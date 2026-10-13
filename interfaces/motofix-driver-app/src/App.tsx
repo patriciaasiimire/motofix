@@ -16,7 +16,8 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
+import { BrowserRouter, HashRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { BottomNav } from "@/components/BottomNav";
 import { MotobotFab } from "@/components/MotobotFab";
 import { PrivateRoute } from "@/components/PrivateRoute";
@@ -62,6 +63,7 @@ import PartsOrders from "./pages/PartsOrders";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
+const AppRouter = Capacitor.isNativePlatform() ? HashRouter : BrowserRouter;
 
 function AppContent() {
   const location = useLocation();
@@ -329,7 +331,7 @@ const App = () => (
           },
         }}
       />
-      <BrowserRouter>
+      <AppRouter>
         <ThemeProvider>
           <WebSocketProvider>
             <RequestProvider>
@@ -337,7 +339,7 @@ const App = () => (
             </RequestProvider>
           </WebSocketProvider>
         </ThemeProvider>
-      </BrowserRouter>
+      </AppRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );

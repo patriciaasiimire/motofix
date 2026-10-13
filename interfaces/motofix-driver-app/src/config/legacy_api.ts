@@ -6,7 +6,7 @@
 import axios from "axios";
 
 // Base URLs for microservices
-export const AUTH_BASE_URL = import.meta.env.VITE_API_AUTH_URL || "https://motofix-auth-service.onrender.com";
+export const AUTH_BASE_URL = import.meta.env.VITE_API_AUTH_URL ?? "";
 export const REQUESTS_BASE_URL = import.meta.env.VITE_API_REQUESTS_URL || "https://motofix-service-requests.onrender.com";
 export const PAYMENTS_BASE_URL = import.meta.env.VITE_API_PAYMENTS_URL || "https://motofix-payments-service.onrender.com";
 
@@ -98,15 +98,21 @@ addAuthInterceptor(paymentsApi);
 
 // Auth API functions
 export const authService = {
-  sendOtp: (phone: string) => authApi.post("/auth/send-otp", { phone }),
+  sendOtp: (phone: string, fullName?: string, numberPlate?: string) =>
+    authApi.post("/auth/register/driver", {
+      phone,
+      ...(fullName ? { full_name: fullName } : {}),
+      ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
+    }),
 
   login: (phone: string, otp: string, fullName?: string) =>
-    authApi.post("/auth/login", {
+    authApi.post("/auth/verify-otp", {
       phone,
-      otp,
-      full_name: fullName,
-      role: "driver",
+      otp_code: otp,
+      ...(fullName ? { full_name: fullName } : {}),
     }),
+
+  resendOtp: (phone: string) => authApi.post("/auth/resend-otp", { phone }),
 
   logout: () => authApi.post("/auth/logout"),
 

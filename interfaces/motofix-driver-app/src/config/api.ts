@@ -19,12 +19,28 @@
 import axios from 'axios';
 import { noteServerDate } from '@/utils/serverClock';
 
-// Production builds retain their service destinations if a hosting environment
-// variable is missing; local development continues to use the Vite proxy.
+// Local development continues to use the Vite proxy. Production builds require
+// VITE_API_AUTH_URL and validate it in vite.config.ts before bundling.
 const serviceUrl = (configured: string | undefined, productionUrl: string) =>
   configured || (import.meta.env.PROD ? productionUrl : '');
 
-export const AUTH_BASE_URL      = serviceUrl(import.meta.env.VITE_API_AUTH_URL, 'https://motofix-auth.onrender.com');
+export const AUTH_BASE_URL = import.meta.env.VITE_API_AUTH_URL ?? '';
+if (import.meta.env.PROD) {
+  let authUrl: URL;
+  try {
+    authUrl = new URL(AUTH_BASE_URL);
+  } catch {
+    throw new Error('Production build requires a valid VITE_API_AUTH_URL.');
+  }
+  if (
+    authUrl.protocol !== 'https:' ||
+    authUrl.hostname === 'localhost' ||
+    authUrl.hostname.endsWith('.localhost') ||
+    authUrl.hostname === '127.0.0.1'
+  ) {
+    throw new Error('Production VITE_API_AUTH_URL must be HTTPS and must not use localhost or 127.0.0.1.');
+  }
+}
 export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_URL, 'https://motofix-dispatch.onrender.com');
 export const PAYMENTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_PAYMENTS_URL, 'https://motofix-dispatch.onrender.com');
 export const DIAGNOSIS_BASE_URL = import.meta.env.VITE_API_DIAGNOSIS_URL ?? '';
@@ -125,12 +141,12 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
     (error) => {
       console.error('❌ Response error:', {
         status: error.response?.status,
-        statusText: error.response?.statusText,
         url: error.config?.url,
-        fullUrl: `${error.config?.baseURL || ''}${error.config?.url || ''}`,
+        fullUrl: error.config?.baseURL
+          ? `${error.config.baseURL.replace(/\/$/, '')}/${(error.config.url || '').replace(/^\//, '')}`
+          : error.config?.url,
         method: error.config?.method,
-        data: error.response?.data,
-        rawResponse: error.response,
+        code: error.code,
         message: error.message,
       });
       
@@ -146,14 +162,60 @@ addAuthInterceptor(diagnosisApi);
 addAuthInterceptor(matchingApi);
 addAuthInterceptor(insuranceApi);
 
+export function getAuthErrorMessage(error: unknown): string {
+  if (!axios.isAxiosError(error)) {
+    return error instanceof Error ? error.message : "Can't reach the server. Check your connection";
+  }
+  if (
+    error.code === 'ECONNABORTED' ||
+    error.code === 'ETIMEDOUT' ||
+    error.response?.status === 408 ||
+    error.response?.status === 504
+  ) {
+    return 'Server is waking up, please try again in a moment';
+  }
+  if (error.response && error.response.status >= 500) {
+    return 'Server error, please try again';
+  }
+  if (error.response && error.response.status >= 400) {
+    const detail = error.response.data?.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') {
+      return detail.message;
+    }
+    if (Array.isArray(detail) && typeof detail[0]?.msg === 'string') return detail[0].msg;
+    return `Request failed (HTTP ${error.response.status})`;
+  }
+  if (!error.response) {
+    return "Can't reach the server. Check your connection";
+  }
+  return error.message || 'Server error, please try again';
+}
+
+function isRetryableOtpFailure(error: unknown): boolean {
+  return axios.isAxiosError(error) && (
+    error.code === 'ECONNABORTED' ||
+    error.code === 'ETIMEDOUT' ||
+    error.code === 'ERR_NETWORK' ||
+    (!error.response && error.code !== 'ERR_CANCELED')
+  );
+}
+
 // Auth API functions
 export const authService = {
-  sendOtp: (phone: string, fullName?: string, numberPlate?: string) =>
-    authApi.post('/auth/register/driver', {
-      phone,
-      ...(fullName    ? { full_name:    fullName }                         : {}),
-      ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
-    }),
+  sendOtp: (phone: string, fullName?: string, numberPlate?: string) => {
+    const send = () => authApi.post('/auth/register/driver', {
+        phone,
+        ...(fullName    ? { full_name:    fullName }                         : {}),
+        ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
+      }, { timeout: 60_000 });
+
+    return send().catch((error: unknown) => {
+      if (!isRetryableOtpFailure(error)) throw error;
+      console.warn('[auth] OTP request failed without a response or timed out; retrying once.');
+      return send();
+    });
+  },
 
   login: (phone: string, otp: string) =>
     authApi.post('/auth/verify-otp', {

@@ -35,6 +35,7 @@ export function createRequestsWs(
   let stopped = false;
   let retryCount = 0;
   let loggedUnavailable = false;
+  const maxReconnectAttempts = 8;
 
   const connect = () => {
     if (stopped || !localStorage.getItem('motofix_token')) return;
@@ -89,9 +90,16 @@ export function createRequestsWs(
 
   const scheduleReconnect = () => {
     if (stopped || !localStorage.getItem('motofix_token')) return;
+    if (retryCount >= maxReconnectAttempts) {
+      if (!loggedUnavailable) {
+        console.error(`[WS] Stopped reconnecting after ${maxReconnectAttempts} failed attempts.`);
+        loggedUnavailable = true;
+      }
+      return;
+    }
     // Exponential backoff: 1s, 2s, 4s … capped at 30s
     const delay = Math.min(1000 * 2 ** retryCount, 30_000);
-    retryCount = Math.min(retryCount + 1, 5);
+    retryCount += 1;
     reconnectTimer = setTimeout(connect, delay);
   };
 
