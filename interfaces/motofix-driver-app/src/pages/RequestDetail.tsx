@@ -770,13 +770,9 @@ export default function RequestDetail() {
     try {
       const response = await requestsService.getMatches(id);
       setMatchedMechanics(response.data.candidates ?? []);
-      if (!response.data.candidates?.length) {
-        setMatchesError(response.data.message || 'No mechanics were found in this area. Try again or choose another area.');
-      }
-    } catch (error: unknown) {
-      const detail = axios.isAxiosError<{ detail?: unknown }>(error) ? error.response?.data?.detail : null;
+    } catch {
       setMatchedMechanics([]);
-      setMatchesError(typeof detail === 'string' ? detail : 'Mechanics could not be loaded. Please try again.');
+      setMatchesError("Couldn't load mechanics. Try again");
     } finally {
       setMatchesLoading(false);
     }
@@ -804,7 +800,7 @@ export default function RequestDetail() {
       const detail = (event as CustomEvent<{ request_id?: string }>).detail;
       if (String(detail?.request_id ?? '') === String(id)) {
         setMatchedMechanics([]);
-        setMatchesError('No mechanics were found in this area. Try again or choose another area.');
+        setMatchesError(null);
         setMatchesLoading(false);
       }
     };
@@ -1344,7 +1340,7 @@ export default function RequestDetail() {
             ) : (
               <div className="mt-3">
                 <p className="text-sm text-muted-foreground">
-                  {matchesError || 'No mechanics were found in this area. Try again or choose another area.'}
+                  {matchesError ?? 'No mechanics available in this area yet'}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
@@ -1352,7 +1348,7 @@ export default function RequestDetail() {
                     onClick={() => void loadMatches()}
                     className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground"
                   >
-                    Try matching again
+                    {matchesError ? 'Retry' : 'Try matching again'}
                   </button>
                   <button
                     type="button"
