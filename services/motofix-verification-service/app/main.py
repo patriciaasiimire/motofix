@@ -170,13 +170,7 @@ app.add_middleware(
 # ────────────────────────────── HEALTH ──────────────────────────────
 @app.get("/health")
 async def health():
-    return {
-        "status": "ok",
-        "service": "motofix-mechanics-service",
-        "database": "connected" if pool else "disconnected",
-        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-    }
+    return {"status": "ok"}
 
 # ────────────────────────────── ROUTERS ──────────────────────────────
 app.include_router(auth_router.router)   # /auth/login, /auth/register, /auth/me

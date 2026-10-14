@@ -645,14 +645,44 @@ async def reverse_geocode(lat: float, lon: float):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint - responds even if DB is down"""
-    return {
-        "status": "ok",
-        "service": "motofix-dispatch-service",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "database": "connected" if pool else "disconnected",
-        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
-    }
+    """Lightweight health check that does not depend on the database."""
+    return {"status": "ok"}
+
+
+async def _post_matching_with_retries(
+    client: httpx.AsyncClient,
+    url: str,
+    **kwargs,
+) -> httpx.Response:
+    retry_delays = (3, 8)
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            response = await client.post(url, **kwargs)
+        except (httpx.ConnectError, httpx.TimeoutException):
+            if attempt == len(retry_delays):
+                raise
+            delay = retry_delays[attempt]
+            logger.warning(
+                "Matching service request failed; retry %s/2 in %ss",
+                attempt + 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        if response.status_code in (502, 503, 504) and attempt < len(retry_delays):
+            delay = retry_delays[attempt]
+            logger.warning(
+                "Matching service returned HTTP %s; retry %s/2 in %ss",
+                response.status_code,
+                attempt + 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+        return response
+
+    raise RuntimeError("Matching service retry loop ended unexpectedly")
 
 
 @app.get("/health-db")
@@ -1079,8 +1109,9 @@ async def _dispatch_to_matched_mechanics(
         if area_id is not None:
             match_body["area_id"] = area_id
 
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            resp = await client.post(
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
+            resp = await _post_matching_with_retries(
+                client,
                 f"{matching_url}/match",
                 headers={"Authorization": f"Bearer {token}"},
                 json=match_body,
@@ -1814,8 +1845,9 @@ async def get_request_matches(
 
     matching_url = os.getenv("MATCHING_SERVICE_URL", "http://127.0.0.1:8003").rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            response = await client.post(
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
+            response = await _post_matching_with_retries(
+                client,
                 f"{matching_url}/match",
                 headers={"Authorization": f"Bearer {_service_token()}"},
                 json=match_body,
@@ -1835,10 +1867,16 @@ async def get_request_matches(
                 raise HTTPException(status_code=502, detail="Matching service returned an invalid response")
     except httpx.HTTPStatusError as exc:
         logger.error("Matching service failed for request %s: HTTP %s", request_id, exc.response.status_code)
-        raise HTTPException(status_code=502, detail="Matching service could not find mechanics right now")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "matching_unavailable", "retry_after": 10},
+        )
     except httpx.RequestError as exc:
-        logger.error("Matching service unavailable for request %s: %s", request_id, exc)
-        raise HTTPException(status_code=502, detail="Matching service is temporarily unavailable")
+        logger.error("Matching service unavailable for request %s: %s", request_id, type(exc).__name__)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "matching_unavailable", "retry_after": 10},
+        )
 
     raw_candidates = payload.get("candidates") if isinstance(payload, dict) else None
     if not isinstance(raw_candidates, list):
