@@ -19,15 +19,20 @@
 import axios from 'axios';
 import { noteServerDate } from '@/utils/serverClock';
 import { debugLog } from '@/utils/debug';
+import { getWakeRetryDelayMs } from '@/utils/coldStart';
 
 declare module 'axios' {
   interface AxiosRequestConfig {
     __networkRetryCount?: number;
+    __wakeStartedAt?: number;
     __networkRetryNoticeActive?: boolean;
   }
 }
 
 let activeNetworkRetryRequests = 0;
+// If the server is genuinely down, background polling would otherwise start a new
+// retry chain every few seconds. Beyond this many at once, new failures just fail.
+const MAX_CONCURRENT_RETRY_CHAINS = 8;
 
 function setNetworkRetryNotice(config: axios.InternalAxiosRequestConfig, active: boolean) {
   if (
@@ -39,10 +44,6 @@ function setNetworkRetryNotice(config: axios.InternalAxiosRequestConfig, active:
   window.dispatchEvent(new CustomEvent('motofix:api-retry', {
     detail: { active: activeNetworkRetryRequests > 0 },
   }));
-}
-
-function isNetworkFailure(error: unknown): error is import('axios').AxiosError {
-  return axios.isAxiosError(error) && !error.response && error.code !== 'ERR_CANCELED';
 }
 
 // Local development continues to use the Vite proxy. Production builds require
@@ -71,6 +72,9 @@ export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_U
 export const PAYMENTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_PAYMENTS_URL, 'https://motofix-dispatch.onrender.com');
 export const DIAGNOSIS_BASE_URL = import.meta.env.VITE_API_DIAGNOSIS_URL ?? '';
 export const MATCHING_BASE_URL  = serviceUrl(import.meta.env.VITE_API_MATCHING_URL, 'https://motofix-matching.onrender.com');
+// The mechanic-verification service is only called by the matching service, but the app
+// wakes it up early (see utils/warmup.ts) so mechanic lookups are not delayed by a cold start.
+export const MECHANICS_BASE_URL = serviceUrl(import.meta.env.VITE_API_MECHANICS_URL, 'https://motofix-verification.onrender.com');
 export const INSURANCE_BASE_URL = import.meta.env.VITE_API_INSURANCE_URL ?? '';
 const requestsWsBase = REQUESTS_BASE_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 export const WS_URL = import.meta.env.VITE_WS_URL || (requestsWsBase ? `${requestsWsBase}/ws/jobs` : '');
@@ -141,6 +145,9 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
+      // Remember when this request first started, so retries for a sleeping server
+      // (see utils/coldStart.ts) can stop after a sensible total time.
+      if (config.__wakeStartedAt === undefined) config.__wakeStartedAt = Date.now();
       // FormData: let browser set Content-Type with boundary (do not send application/json)
       if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
         delete config.headers['Content-Type'];
@@ -167,12 +174,28 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
     (error) => {
       const config = axios.isAxiosError(error) ? error.config : undefined;
       const retryCount = config?.__networkRetryCount ?? 0;
-      if (config && isNetworkFailure(error) && retryCount < 2) {
+      // A sleeping Render service answers with no response at all (shown by the browser as
+      // a "network error") or a 502/503/504 while it wakes up. Retry those for up to ~90s
+      // instead of giving up after a few seconds. See utils/coldStart.ts for the rules.
+      const tooManyRetryChains =
+        retryCount === 0 && activeNetworkRetryRequests >= MAX_CONCURRENT_RETRY_CHAINS;
+      const retryDelay = config && axios.isAxiosError(error) && !tooManyRetryChains
+        ? getWakeRetryDelayMs({
+            method: config.method,
+            url: config.url,
+            attempt: retryCount,
+            elapsedMs: Date.now() - (config.__wakeStartedAt ?? Date.now()),
+            hasResponse: !!error.response,
+            status: error.response?.status,
+            code: error.code,
+            retryAfterSeconds: Number(error.response?.data?.retry_after) || undefined,
+          })
+        : null;
+      if (config && retryDelay !== null) {
         config.__networkRetryCount = retryCount + 1;
         setNetworkRetryNotice(config, true);
-        debugLog(`[api] Network request failed; retry ${retryCount + 1}/2 scheduled.`);
-        const delay = retryCount === 0 ? 3_000 : 8_000;
-        return new Promise((resolve) => setTimeout(resolve, delay))
+        debugLog(`[api] Server not ready; retry ${retryCount + 1} in ${retryDelay}ms.`);
+        return new Promise((resolve) => setTimeout(resolve, retryDelay))
           .then(() => instance.request(config));
       }
       if (config) setNetworkRetryNotice(config, false);
@@ -224,7 +247,7 @@ export function getAuthErrorMessage(error: unknown): string {
     return `Request failed (HTTP ${error.response.status})`;
   }
   if (!error.response) {
-    return "Can't reach the server. Check your connection";
+    return "Can't reach the server. It may still be waking up. Wait a minute and try again, or check your connection";
   }
   return error.message || 'Server error, please try again';
 }

@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 _AT_USERNAME = os.getenv("AT_USERNAME", "sandbox")
 _AT_API_KEY  = os.getenv("AT_API_KEY", "")
 _AT_SMS_URL  = "https://api.africastalking.com/version1/messaging"
+# Optional registered sender ID (alphanumeric or shortcode). Only sent when set.
+_AT_SENDER_ID = os.getenv("AT_SENDER_ID", "").strip()
+
+# Africa's Talking per-recipient status codes that mean the message was accepted for
+# delivery: 100 Processed, 101 Sent, 102 Queued. Anything else (e.g. 402 InvalidSenderId,
+# 405 InsufficientBalance, 406 UserInBlacklist, 407 CouldNotRoute) is a failure.
+_AT_OK_CODES = {100, 101, 102}
 
 
 def format_phone(phone: str) -> str:
@@ -43,6 +50,14 @@ def send_sms(phone: str, message: str) -> bool:
 
     try:
         logger.info("Calling Africa's Talking SMS provider for phone ending %s", masked_phone)
+        payload = {
+            "username": _AT_USERNAME,
+            "to": formatted,
+            "message": message,
+        }
+        if _AT_SENDER_ID:
+            payload["from"] = _AT_SENDER_ID
+
         with httpx.Client(timeout=10) as client:
             resp = client.post(
                 _AT_SMS_URL,
@@ -51,15 +66,39 @@ def send_sms(phone: str, message: str) -> bool:
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Accept": "application/json",
                 },
-                data={
-                    "username": _AT_USERNAME,
-                    "to": formatted,
-                    "message": message,
-                },
+                data=payload,
             )
         resp.raise_for_status()
-        logger.info("SMS provider accepted message for phone ending %s", masked_phone)
-        return True
+
+        # HTTP 201 only means Africa's Talking received the request. The real outcome for
+        # the number is inside the body, so read it and log it (never the message text).
+        try:
+            recipients = resp.json().get("SMSMessageData", {}).get("Recipients", []) or []
+        except ValueError:
+            recipients = []
+
+        if not recipients:
+            logger.error(
+                "SMS provider returned no recipient status for phone ending %s", masked_phone
+            )
+            return False
+
+        delivered = True
+        for recipient in recipients:
+            status_text = str(recipient.get("status", "unknown"))
+            status_code = recipient.get("statusCode")
+            if status_code in _AT_OK_CODES or status_text.lower() == "success":
+                logger.info(
+                    "SMS provider accepted message for phone ending %s (status=%s code=%s)",
+                    masked_phone, status_text, status_code,
+                )
+            else:
+                delivered = False
+                logger.error(
+                    "SMS provider REJECTED message for phone ending %s: status=%s code=%s",
+                    masked_phone, status_text, status_code,
+                )
+        return delivered
     except Exception as exc:
         logger.error("SMS provider call failed for phone ending %s: %s", masked_phone, exc)
         return False

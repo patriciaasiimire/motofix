@@ -76,7 +76,7 @@ function AppContent() {
     const handleRetryState = (event: Event) => {
       const active = (event as CustomEvent<{ active: boolean }>).detail.active;
       if (active) {
-        toast.loading('Server is waking up, one moment', { id: toastId, duration: Infinity });
+        toast.loading('Server is waking up, this can take up to a minute', { id: toastId, duration: Infinity });
       } else {
         toast.dismiss(toastId);
       }
