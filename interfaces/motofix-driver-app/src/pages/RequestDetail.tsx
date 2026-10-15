@@ -584,7 +584,8 @@ function ConfirmJobCard({ onConfirm, onDecline }: { onConfirm: () => Promise<voi
 export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { requests, paymentsEnabled, sendWsMessage, markCancelled, revertCancelled } = useRequests();
+  const { requests, paymentsEnabled, isWsConnected, sendWsMessage, markCancelled, revertCancelled } = useRequests();
+  const loadedRequestIdRef = useRef<string | null>(null);
 
   const [request, setRequest] = useState<Request | null>(null);
   const [matchedMechanics, setMatchedMechanics] = useState<RequestMechanicMatch[]>([]);
@@ -729,9 +730,10 @@ export default function RequestDetail() {
 
   // ── Load request ──────────────────────────────────────────────────────────
   useEffect(() => {
+    if (!id || loadedRequestIdRef.current === id) return;
+    loadedRequestIdRef.current = id;
     const cached = normalizeRequest(requests.find((r) => String(r.id) === id));
     if (cached) { setRequest(cached); setIsLoading(false); }
-    if (!id) return;
     requestsService.getById(id)
       .then((res) => {
         setRequest(normalizeRequest(res.data));
@@ -740,6 +742,27 @@ export default function RequestDetail() {
       .catch(() => { if (!cached) setIsLoading(false); });
   }, [id, requests]);
 
+  useEffect(() => {
+    const requestStatus = request?.status;
+    if (!id || !requestStatus || isWsConnected || ['completed', 'cancelled'].includes(requestStatus)) return;
+
+    const refreshActiveRequest = () => {
+      if (document.visibilityState !== 'visible') return;
+      requestsService.getById(id)
+        .then((res) => setRequest(normalizeRequest(res.data)))
+        .catch((error: unknown) => console.error('[dispatch] Could not refresh active request.', error));
+    };
+    const interval = setInterval(refreshActiveRequest, 10_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshActiveRequest();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [id, requestStatus, isWsConnected]);
+
   const loadMatches = useCallback(async () => {
     if (!id) return;
     setMatchesLoading(true);
@@ -747,13 +770,9 @@ export default function RequestDetail() {
     try {
       const response = await requestsService.getMatches(id);
       setMatchedMechanics(response.data.candidates ?? []);
-      if (!response.data.candidates?.length) {
-        setMatchesError(response.data.message || 'No mechanics were found in this area. Try again or choose another area.');
-      }
-    } catch (error: unknown) {
-      const detail = axios.isAxiosError<{ detail?: unknown }>(error) ? error.response?.data?.detail : null;
+    } catch {
       setMatchedMechanics([]);
-      setMatchesError(typeof detail === 'string' ? detail : 'Mechanics could not be loaded. Please try again.');
+      setMatchesError("Couldn't load mechanics. Try again");
     } finally {
       setMatchesLoading(false);
     }
@@ -781,7 +800,7 @@ export default function RequestDetail() {
       const detail = (event as CustomEvent<{ request_id?: string }>).detail;
       if (String(detail?.request_id ?? '') === String(id)) {
         setMatchedMechanics([]);
-        setMatchesError('No mechanics were found in this area. Try again or choose another area.');
+        setMatchesError(null);
         setMatchesLoading(false);
       }
     };
@@ -1321,7 +1340,7 @@ export default function RequestDetail() {
             ) : (
               <div className="mt-3">
                 <p className="text-sm text-muted-foreground">
-                  {matchesError || 'No mechanics were found in this area. Try again or choose another area.'}
+                  {matchesError ?? 'No mechanics available in this area yet'}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
@@ -1329,7 +1348,7 @@ export default function RequestDetail() {
                     onClick={() => void loadMatches()}
                     className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground"
                   >
-                    Try matching again
+                    {matchesError ? 'Retry' : 'Try matching again'}
                   </button>
                   <button
                     type="button"

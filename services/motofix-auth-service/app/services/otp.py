@@ -8,6 +8,7 @@
 # few wrong tries before the code is thrown away.
 # Uses the raw asyncpg connection (database link) passed in from the router.
 
+import os
 import secrets
 import logging
 from datetime import datetime, timedelta, timezone
@@ -16,6 +17,16 @@ logger = logging.getLogger(__name__)
 
 OTP_EXPIRY_MINUTES = 5
 MAX_ATTEMPTS       = 5
+
+# A repeated "send me a code" request within this many seconds re-uses the code that is
+# already stored instead of replacing it. The app retries when a sleeping server is slow
+# to answer, and without this every retry would invalidate the SMS the user just got.
+OTP_REUSE_SECONDS = 60
+
+# Printing OTPs in the logs is for local development ONLY. Anyone who can read the
+# production logs could otherwise log in as any user, so it is off unless explicitly
+# enabled with DEBUG_LOG_OTP=true.
+_LOG_OTP = os.getenv("DEBUG_LOG_OTP", "").strip().lower() == "true"
 
 
 def generate_otp() -> str:
@@ -52,8 +63,39 @@ async def store_otp(
         """,
         phone, otp, now, expires_at, pending_full_name, pending_number_plate,
     )
-    logger.debug("OTP stored for %s (expires %s)", phone, expires_at)
-    logger.info("🔑 DEV OTP for %s: %s", phone, otp)
+    logger.debug("OTP stored for phone ending %s (expires %s)", phone[-4:], expires_at)
+    if _LOG_OTP:
+        logger.info("🔑 DEV OTP for %s: %s", phone, otp)
+
+
+async def get_recent_otp(conn, phone: str) -> str | None:
+    """
+    Return the OTP already stored for `phone` if it was created within the last
+    OTP_REUSE_SECONDS and has not expired; otherwise None.
+
+    Used so a retried request (same phone, a few seconds later) sends the SAME code
+    again rather than invalidating the one the user may already have received.
+    """
+    row = await conn.fetchrow(
+        "SELECT otp_code, created_at, expires_at FROM otp_store WHERE phone = $1",
+        phone,
+    )
+    if not row:
+        return None
+
+    now = datetime.now(timezone.utc)
+    created_at = row["created_at"]
+    expires_at = row["expires_at"]
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if now > expires_at:
+        return None
+    if (now - created_at).total_seconds() > OTP_REUSE_SECONDS:
+        return None
+    return row["otp_code"]
 
 
 async def verify_otp(conn, phone: str, submitted_otp: str) -> bool:

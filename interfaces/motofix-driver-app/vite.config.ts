@@ -1,4 +1,4 @@
-import { defineConfig, createLogger } from "vite";
+import { defineConfig, createLogger, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
@@ -13,13 +13,50 @@ logger.error = (msg, opts) => {
   _err(msg, opts);
 };
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
-  customLogger: logger,
-  server: {
-    host: "127.0.0.1",
-    port: 8085,
-    allowedHosts: 'all',
-    proxy: {
+export default defineConfig(({ mode }) => {
+  if (mode === 'production') {
+    const authUrl = loadEnv(mode, process.cwd(), 'VITE_').VITE_API_AUTH_URL;
+    if (!authUrl) {
+      throw new Error('Production build requires VITE_API_AUTH_URL.');
+    }
+    let parsedAuthUrl: URL;
+    try {
+      parsedAuthUrl = new URL(authUrl);
+    } catch {
+      throw new Error('VITE_API_AUTH_URL must be a valid HTTPS URL in production.');
+    }
+    if (
+      parsedAuthUrl.protocol !== 'https:' ||
+      parsedAuthUrl.hostname === 'localhost' ||
+      parsedAuthUrl.hostname.endsWith('.localhost') ||
+      parsedAuthUrl.hostname === '127.0.0.1'
+    ) {
+      throw new Error('Production VITE_API_AUTH_URL must use HTTPS and cannot point to localhost or 127.0.0.1.');
+    }
+  }
+
+  return {
+    base: "./",
+    customLogger: logger,
+    // Production only: strip debug logs (including the token log) from the bundle.
+    // console.error and console.warn are kept so real failures still show up.
+    // Requires: npm i -D terser
+    build:
+      mode === "production"
+        ? {
+            minify: "terser",
+            terserOptions: {
+              compress: {
+                pure_funcs: ["console.log", "console.info", "console.debug"],
+              },
+            },
+          }
+        : {},
+    server: {
+      host: "127.0.0.1",
+      port: 8085,
+      allowedHosts: true,
+      proxy: {
       '/auth':         { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/users':        { target: 'http://127.0.0.1:8000', changeOrigin: true },
       '/requests': {
@@ -50,12 +87,13 @@ export default defineConfig(({ mode }) => ({
       '/claims':       { target: 'http://127.0.0.1:8006', changeOrigin: true },
       '/insurers':     { target: 'http://127.0.0.1:8006', changeOrigin: true },
       '/applications': { target: 'http://127.0.0.1:8006', changeOrigin: true },
+      },
     },
-  },
-  plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
+    plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+    resolve: {
+      alias: {
+        "@": path.resolve(__dirname, "./src"),
+      },
     },
-  },
-}));
+  };
+});

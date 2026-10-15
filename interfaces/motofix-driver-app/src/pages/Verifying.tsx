@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { authService } from '@/config/api';
+import { authService, getAuthErrorMessage } from '@/config/api';
 import { toast } from 'sonner';
 import { PROFILE_COMPLETE_KEY } from './Onboarding';
 
@@ -17,6 +17,7 @@ const MESSAGES = [
 ];
 
 type Phase = 'verifying' | 'success';
+type AuthUser = Awaited<ReturnType<ReturnType<typeof useAuth>['login']>>;
 
 export default function Verifying() {
   const navigate = useNavigate();
@@ -33,12 +34,12 @@ export default function Verifying() {
 
   const [msgIdx,  setMsgIdx]  = useState(0);
   const [phase,   setPhase]   = useState<Phase>('verifying');
-  const [userData, setUserData] = useState<any>(null);
+  const [userData, setUserData] = useState<AuthUser | null>(null);
 
   /* refs so closures in effects always see latest values */
   const apiDone     = useRef(false);
   const minTimeDone = useRef(false);
-  const pending     = useRef<any>(null);
+  const pending     = useRef<AuthUser | null>(null);
   const errored     = useRef(false);
 
   const tryComplete = () => {
@@ -73,14 +74,12 @@ export default function Verifying() {
         apiDone.current  = true;
         tryComplete();
       })
-      .catch((err: any) => {
+      .catch((err: unknown) => {
         errored.current = true;
-        const msg = err.response?.data?.detail?.message
-          || err.response?.data?.detail
-          || 'Verification failed. Please try again.';
-        toast.error(msg);
+        toast.error(getAuthErrorMessage(err));
         navigate('/login', { replace: true });
       });
+  // This verification should run once for the OTP payload received in route state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -95,7 +94,6 @@ export default function Verifying() {
     }, MESSAGES.length * 950);
 
     return () => { timers.forEach(clearTimeout); clearTimeout(done); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* navigate after success is shown */
@@ -109,7 +107,7 @@ export default function Verifying() {
       navigate(isNewSignup && !profileComplete ? '/onboarding' : '/requests', { replace: true });
     }, 3800);
     return () => clearTimeout(t);
-  }, [phase, userData, navigate]);
+  }, [phase, userData, navigate, fullName]);
 
   /* ─────────────────────────────────────────── */
 
@@ -389,4 +387,3 @@ export default function Verifying() {
     </div>
   );
 }
-

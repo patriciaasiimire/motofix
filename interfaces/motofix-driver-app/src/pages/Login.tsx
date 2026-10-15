@@ -6,17 +6,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Phone, KeyRound, ArrowRight, Loader2, ArrowLeft, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { authService } from '@/config/api';
+import { authService, getAuthErrorMessage } from '@/config/api';
 import { toast } from 'sonner';
+import axios from 'axios';
 
 type Step = 'phone' | 'otp';
-
-function extractErrMsg(err: any): string {
-  const detail = err.response?.data?.detail;
-  if (detail?.message) return detail.message;
-  if (Array.isArray(detail) && detail[0]?.msg) return detail[0].msg;
-  return err.message || 'Something went wrong';
-}
 
 export default function Login() {
   const [step, setStep]         = useState<Step>('phone');
@@ -31,7 +25,8 @@ export default function Login() {
   useEffect(() => { if (localStorage.getItem('motofix_token')) navigate('/requests', { replace: true }); }, [navigate]);
 
   // When arriving from Onboarding after signup, the registered phone is locked
-  const lockedPhone: string | null = (location.state as any)?.lockedPhone ?? null;
+  const lockedPhone: string | null =
+    (location.state as { lockedPhone?: string } | null)?.lockedPhone ?? null;
   const [phone, setPhone] = useState(lockedPhone ?? '');
 
   const formatPhone = (v: string) => {
@@ -69,8 +64,8 @@ export default function Login() {
       startCooldown();
       const msg: string = res.data?.message ?? '';
       toast.success(msg || 'OTP sent to your phone', { duration: 5000 });
-    } catch (err: any) {
-      toast.error(extractErrMsg(err));
+    } catch (err: unknown) {
+      toast.error(getAuthErrorMessage(err));
     } finally { setLoading(false); }
   };
 
@@ -81,9 +76,9 @@ export default function Login() {
       let res;
       try {
         res = await authService.resendOtp(phone);
-      } catch (resendErr: any) {
+      } catch (resendErr: unknown) {
         // If user not found (e.g. service restarted), re-register to get a fresh OTP
-        if (resendErr.response?.status === 404) {
+        if (axios.isAxiosError(resendErr) && resendErr.response?.status === 404) {
           res = await authService.sendOtp(phone);
         } else {
           throw resendErr;
@@ -92,8 +87,8 @@ export default function Login() {
       const msg: string = res.data?.message ?? '';
       startCooldown();
       toast.success(msg || 'New code sent to your phone', { duration: 5000 });
-    } catch (err: any) {
-      toast.error(extractErrMsg(err));
+    } catch (err: unknown) {
+      toast.error(getAuthErrorMessage(err));
     } finally { setResending(false); }
   };
 

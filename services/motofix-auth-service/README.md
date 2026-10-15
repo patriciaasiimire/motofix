@@ -39,6 +39,13 @@ Interactive API docs at `/docs`. Main groups:
 | `DISPATCH_SERVICE_URL` / `DISPATCH_DATABASE_URL` | Cross-service calls/reads to dispatch. |
 | `ENV` | `development` / `production` (controls secure-cookie flags). |
 
+## Production CORS deployment
+
+The driver web app (`https://motofixug.netlify.app`) and Capacitor WebView origins
+are configured in `app/core/cors.py`. After changing the allowed origins or headers,
+redeploy the `motofix-auth` service on Render; frontend deployments do not update
+the CORS policy served by the running auth API.
+
 Driver sessions do not expire due to inactivity. OTP is required only after
 explicit logout, a new install, or cleared app data—not for periodic re-authentication.
 

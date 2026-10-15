@@ -34,7 +34,7 @@ from app.schemas.driver import (
     PhoneRequest,
 )
 from app.schemas.common import SuccessResponse
-from app.services.otp import generate_otp, store_otp, verify_otp
+from app.services.otp import generate_otp, get_recent_otp, store_otp, verify_otp
 from app.services.sms import send_sms, format_phone
 from app.services.logger import log_event
 from app.services.rate_limit import check_rate_limit, record_attempt
@@ -84,6 +84,13 @@ async def register_driver(body: DriverRegisterRequest, request: Request, backgro
             message="Too many OTP requests for this number. Please wait before trying again.",
         )
 
+        # If the app is retrying (a sleeping server answered slowly the first time), the
+        # code from the first attempt is still valid: re-send that SAME code instead of
+        # replacing it, so the SMS the user already received keeps working.
+        reused_otp = await get_recent_otp(conn, phone)
+        if reused_otp:
+            otp = reused_otp
+
         # New users must provide full_name and number_plate; returning users just need phone
         existing = await conn.fetchrow("SELECT id FROM users WHERE phone = $1", phone)
         if not existing and (not body.full_name or not body.number_plate):
@@ -118,16 +125,18 @@ async def register_driver(body: DriverRegisterRequest, request: Request, backgro
                     """,
                     phone, body.full_name or None, plate,
                 )
-            await store_otp(conn, phone, otp)
+            if not reused_otp:
+                await store_otp(conn, phone, otp)
         else:
             # NEW driver — DO NOT create the users row yet. The account is only
             # created once the OTP confirms the phone number (in verify-otp), so
             # unverified signups never appear in the admin Drivers list.
-            await store_otp(
-                conn, phone, otp,
-                pending_full_name=body.full_name,
-                pending_number_plate=plate,
-            )
+            if not reused_otp:
+                await store_otp(
+                    conn, phone, otp,
+                    pending_full_name=body.full_name,
+                    pending_number_plate=plate,
+                )
 
         await record_attempt(conn, f"otp:{phone}")
 
@@ -138,6 +147,7 @@ async def register_driver(body: DriverRegisterRequest, request: Request, backgro
                         + ("" if existing else " (pending new-driver registration)"),
         )
 
+    logger.info("Generated and stored driver OTP for phone ending %s; queueing SMS delivery", phone[-4:])
     # Deliver the SMS in the background so the response returns immediately and the
     # blocking Africa's Talking HTTP call never stalls the event loop. The OTP is
     # already persisted; if delivery fails the user can resend.
@@ -357,6 +367,7 @@ async def resend_otp(body: PhoneRequest, request: Request, background_tasks: Bac
         await log_event(conn, event_type="otp_resent",
                         description=f"OTP resent to {phone}")
 
+    logger.info("Generated and stored replacement driver OTP for phone ending %s; queueing SMS delivery", phone[-4:])
     background_tasks.add_task(
         send_sms, phone, f"MOTOFIX: Your verification code is {otp}. It expires in 5 minutes."
     )

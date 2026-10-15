@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 VALID_EVENTS = {
-    "user_registered", "otp_verified", "otp_failed", "otp_resent",
+    "user_registered", "otp_sent", "otp_verified", "otp_failed", "otp_resent",
     "provider_registered", "provider_login", "provider_login_failed",
     "admin_login", "admin_login_failed",
     "provider_approved", "provider_rejected", "provider_deleted",

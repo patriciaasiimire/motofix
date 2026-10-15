@@ -13,10 +13,12 @@
 // New screen? Add its page import, then a <Route> here. The bottom nav is shown
 // consistently on authenticated screens and omitted from public/auth screens.
 
+import { useEffect } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
+import { BrowserRouter, HashRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { BottomNav } from "@/components/BottomNav";
 import { MotobotFab } from "@/components/MotobotFab";
 import { PrivateRoute } from "@/components/PrivateRoute";
@@ -24,10 +26,11 @@ import { NetworkBanner } from "@/components/NetworkBanner";
 import { RequestProvider, useRequests } from "@/contexts/RequestContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
-import { useAuth } from "@/hooks/useAuth";
+import { AuthProvider, useAuth } from "@/hooks/useAuth";
 import { useFcmToken } from "@/hooks/useFcmToken";
 import { useReminderScheduler } from "@/hooks/useReminderScheduler";
 import { MOTOBOT_ENABLED } from "@/config/features";
+import { toast } from "sonner";
 import Splash from "./pages/Splash";
 import Welcome from "./pages/Welcome";
 import DriverEntry from "./pages/DriverEntry";
@@ -62,11 +65,25 @@ import PartsOrders from "./pages/PartsOrders";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
+const AppRouter = Capacitor.isNativePlatform() ? HashRouter : BrowserRouter;
 
 function AppContent() {
   const location = useLocation();
   const { isAuthenticated } = useAuth();
   const { requests } = useRequests();
+  useEffect(() => {
+    const toastId = 'motofix-api-retry';
+    const handleRetryState = (event: Event) => {
+      const active = (event as CustomEvent<{ active: boolean }>).detail.active;
+      if (active) {
+        toast.loading('Server is waking up, this can take up to a minute', { id: toastId, duration: Infinity });
+      } else {
+        toast.dismiss(toastId);
+      }
+    };
+    window.addEventListener('motofix:api-retry', handleRetryState);
+    return () => window.removeEventListener('motofix:api-retry', handleRetryState);
+  }, []);
   useFcmToken(isAuthenticated);
   // Never fire reminder pop-ups on public/auth screens (splash, welcome, login,
   // signup, verifying, onboarding) — even if a stale token leaves isAuthenticated true.
@@ -329,15 +346,17 @@ const App = () => (
           },
         }}
       />
-      <BrowserRouter>
+      <AppRouter>
         <ThemeProvider>
-          <WebSocketProvider>
-            <RequestProvider>
-              <AppContent />
-            </RequestProvider>
-          </WebSocketProvider>
+          <AuthProvider>
+            <WebSocketProvider>
+              <RequestProvider>
+                <AppContent />
+              </RequestProvider>
+            </WebSocketProvider>
+          </AuthProvider>
         </ThemeProvider>
-      </BrowserRouter>
+      </AppRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );
