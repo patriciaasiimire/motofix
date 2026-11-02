@@ -1,8 +1,12 @@
+/* @import must come before every other rule or the browser ignores it. */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+/* MOTOFIX brand yellow: #FFCA00 = hsl(47.5 100% 50%)
+   Hover/darker shade:  #E6B600 = hsl(47.5 100% 45%) */
 
 @layer base {
   :root {
@@ -16,8 +20,8 @@
     --popover: 220 18% 10%;
     --popover-foreground: 45 100% 95%;
 
-    /* Golden Yellow Primary */
-    --primary: 48 100% 50%;
+    /* Brand yellow primary (#FFCA00) */
+    --primary: 47.5 100% 50%;
     --primary-foreground: 220 20% 6%;
 
     --secondary: 220 15% 15%;
@@ -26,7 +30,8 @@
     --muted: 220 15% 18%;
     --muted-foreground: 220 10% 55%;
 
-    --accent: 48 90% 45%;
+    /* Darker brand yellow (#E6B600) for hover/accent states */
+    --accent: 47.5 100% 45%;
     --accent-foreground: 220 20% 6%;
 
     --destructive: 0 72% 51%;
@@ -35,18 +40,20 @@
     --success: 142 76% 45%;
     --success-foreground: 0 0% 100%;
 
+    /* Semantic warning colour: intentionally stays orange so it is
+       distinguishable from the brand yellow. */
     --warning: 38 92% 50%;
     --warning-foreground: 220 20% 6%;
 
     --border: 220 15% 18%;
     --input: 220 15% 15%;
-    --ring: 48 100% 50%;
+    --ring: 47.5 100% 50%;
 
     --radius: 1rem;
 
     /* Custom Motofix tokens */
-    --glow-yellow: 0 0 20px hsl(48 100% 50% / 0.3);
-    --glow-yellow-intense: 0 0 40px hsl(48 100% 50% / 0.5);
+    --glow-yellow: 0 0 20px hsl(47.5 100% 50% / 0.3);
+    --glow-yellow-intense: 0 0 40px hsl(47.5 100% 50% / 0.5);
 
     /* Inline-style tokens (default = dark) */
     --page-bg:    hsl(220, 20%, 6%);
@@ -93,7 +100,7 @@
     --status-offline-color:  #f87171;
     --status-offline-dot:    #ef4444;
     --accent-blue:           #60A5FA;
-    --accent-amber:          #FCD34D;
+    --accent-amber:          #FFCA00;
     --accent-green:          #4ade80;
 
     /* OutOfFuelFlow sheet tokens */
@@ -166,7 +173,8 @@
     --status-offline-color:  #f87171;
     --status-offline-dot:    #ef4444;
     --accent-blue:           #60A5FA;
-    --accent-amber:          #FCD34D;
+    --accent-amber:          #FFCA00;
+    --accent-green:          #4ade80;
 
     /* OutOfFuelFlow sheet tokens */
     --oof-sheet:      hsl(220,20%,8%);
@@ -189,9 +197,10 @@
     --popover: 0 0% 100%;
     --popover-foreground: 220 25% 12%;
 
-    /* Keep golden yellow primary */
-    --primary: 38 95% 48%;
-    --primary-foreground: 0 0% 100%;
+    /* Same brand yellow (#FFCA00) as dark mode.
+       Foreground is DARK because white on #FFCA00 is unreadable. */
+    --primary: 47.5 100% 50%;
+    --primary-foreground: 220 25% 6%;
 
     --secondary: 40 20% 90%;
     --secondary-foreground: 220 25% 12%;
@@ -199,18 +208,18 @@
     --muted: 40 15% 88%;
     --muted-foreground: 220 10% 30%;
 
-    --accent: 38 90% 44%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 47.5 100% 45%;
+    --accent-foreground: 220 25% 6%;
 
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
 
     --border: 220 15% 10%;
     --input: 40 15% 88%;
-    --ring: 38 95% 48%;
+    --ring: 47.5 100% 50%;
 
-    --glow-yellow: 0 0 20px hsl(38 95% 48% / 0.2);
-    --glow-yellow-intense: 0 0 40px hsl(38 95% 48% / 0.35);
+    --glow-yellow: 0 0 20px hsl(47.5 100% 50% / 0.3);
+    --glow-yellow-intense: 0 0 40px hsl(47.5 100% 50% / 0.5);
 
     /* Inline-style tokens */
     --page-bg:    hsl(40, 25%, 94%);
@@ -256,6 +265,8 @@
     --status-offline-color:  #b91c1c;
     --status-offline-dot:    #dc2626;
     --accent-blue:           #1d4ed8;
+    /* Deliberately NOT #FFCA00: this token is used for text/icons on light
+       backgrounds, where bright yellow would be unreadable. */
     --accent-amber:          #b45309;
     --accent-green:          #15803d;
 
@@ -349,10 +360,10 @@
 
   @keyframes pulse-glow {
     0%, 100% {
-      box-shadow: 0 0 20px hsl(48 100% 50% / 0.3);
+      box-shadow: 0 0 20px hsl(47.5 100% 50% / 0.3);
     }
     50% {
-      box-shadow: 0 0 30px hsl(48 100% 50% / 0.5);
+      box-shadow: 0 0 30px hsl(47.5 100% 50% / 0.5);
     }
   }
 

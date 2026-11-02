@@ -9,8 +9,8 @@
 //      accepted, is en route, moved on the map, finished). Handled in the WS effect.
 //   2. REST fetch — fetchAll() pulls the full list from the server (on load, on login
 //      change, and after each WS event) as the reliable snapshot.
-//   3. Polling fallback — if the WebSocket never connects within 15s, we poll every
-//      10s instead, so updates still arrive on a bad connection.
+//   3. Polling fallback — while a request is active and WebSocket is unavailable,
+//      refresh the request list every 15s (only while the page is visible).
 //
 // Two subtleties worth knowing:
 //   • "Optimistic cancel": when the driver cancels, we flip the status locally right
@@ -86,6 +86,7 @@ interface RequestContextValue {
   isLoading: boolean;
   error: string | null;
   isWsConnected: boolean;
+  isWsPaused: boolean;
   refresh: () => Promise<void>;
   markCancelled: (id: string) => void;
   revertCancelled: (id: string) => void;
@@ -125,6 +126,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isWsConnected, setIsWsConnected] = useState(false);
+  const [isWsPaused, setIsWsPaused] = useState(false);
   const [featureFlagsLoaded, setFeatureFlagsLoaded] = useState(false);
   const [paymentsEnabled, setPaymentsEnabled] = useState(false);
   const [pendingQuote, setPendingQuote] = useState<QuoteRecord | null>(null);
@@ -132,7 +134,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
 
   const previousStatusesRef  = useRef<Map<string, string>>(new Map());
   const localCancelledRef    = useRef(new Set<string>());
-  const wsEverConnected = useRef(false);
+  const fallbackPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const quoteCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsSendRef = useRef<((data: object) => void) | null>(null);
 
@@ -216,11 +218,16 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
   const fetchAll = useCallback(async (showLoader = true) => {
     if (showLoader) setIsLoading(true);
     setError(null);
+    if (!localStorage.getItem('motofix_token')) {
+      setRequests([]);
+      setIsLoading(false);
+      return;
+    }
     try {
       const res = await requestsService.getAll();
       applyUpdates(res.data || []);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load requests');
+    } catch (err: unknown) {
+      console.error('[dispatch] Could not load requests; continuing with cached or empty state.', err);
     } finally {
       setIsLoading(false);
     }
@@ -250,7 +257,8 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       try {
         const res = await requestsService.getFeatureFlags();
         if (!cancelled) setPaymentsEnabled(!!res.data?.payments);
-      } catch {
+      } catch (err) {
+        console.warn('[dispatch] Feature flags unavailable; using disabled defaults.', err);
         if (!cancelled) setPaymentsEnabled(false);
       } finally {
         if (!cancelled) setFeatureFlagsLoaded(true);
@@ -349,11 +357,15 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       },
       () => {
         setIsWsConnected(true);
-        wsEverConnected.current = true;
+        if (fallbackPollRef.current) {
+          clearInterval(fallbackPollRef.current);
+          fallbackPollRef.current = null;
+        }
       },
       () => {
         setIsWsConnected(false);
       },
+      setIsWsPaused,
     );
 
     wsSendRef.current = send;
@@ -363,30 +375,27 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
     };
   }, [fetchAll]);
 
-  // Polling fallback — only runs if WS never connected after 15s
-  useEffect(() => {
-    const check = setTimeout(() => {
-      if (!wsEverConnected.current) {
-        // Start 10-second polling as fallback
-        const interval = setInterval(() => fetchAll(false), 10_000);
-        return () => clearInterval(interval);
-      }
-    }, 15_000);
-    return () => clearTimeout(check);
-  }, [fetchAll]);
-
-  // Active-request watchdog (mirror of the mechanic app's). The WebSocket already pushes
-  // a mechanic cancellation instantly; this is the BACKUP for when that event is missed
-  // (socket drop / app backgrounded): while any request is still live we re-fetch on a
-  // steady cadence, so the cancellation lands within ~10s regardless of the socket. The
-  // status-change toast ("Your mechanic cancelled this request") fires from applyUpdates,
-  // and previousStatusesRef dedupes it so the WS and this poll can't double-notify.
   const hasLiveRequest = requests.some(r => r.status !== 'completed' && r.status !== 'cancelled');
+
+  // Refresh the request list only while work is active and the socket is down.
   useEffect(() => {
-    if (!hasLiveRequest) return;
-    const interval = setInterval(() => fetchAll(false), 10_000);
-    return () => clearInterval(interval);
-  }, [hasLiveRequest, fetchAll]);
+    if (isWsConnected || !hasLiveRequest) return;
+    const poll = () => {
+      if (document.visibilityState === 'visible') void fetchAll(false);
+    };
+    fallbackPollRef.current = setInterval(poll, 15_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') poll();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (fallbackPollRef.current) {
+        clearInterval(fallbackPollRef.current);
+        fallbackPollRef.current = null;
+      }
+    };
+  }, [fetchAll, hasLiveRequest, isWsConnected]);
 
   const refresh = useCallback(() => fetchAll(false), [fetchAll]);
 
@@ -428,6 +437,7 @@ export function RequestProvider({ children }: { children: React.ReactNode }) {
       isLoading,
       error,
       isWsConnected,
+      isWsPaused,
       refresh,
       markCancelled,
       revertCancelled,

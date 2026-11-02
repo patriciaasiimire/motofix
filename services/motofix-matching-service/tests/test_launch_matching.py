@@ -17,6 +17,7 @@ def test_every_kampala_service_area_has_a_matching_region():
 class FakeResponse:
     def __init__(self, mechanics):
         self._mechanics = mechanics
+        self.status_code = 200
 
     def raise_for_status(self):
         return None

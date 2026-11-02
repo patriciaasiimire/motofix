@@ -35,6 +35,14 @@ Enhanced logging and debugging capabilities in the auth service to diagnose pers
 
 ## Deployment Checklist
 
+### Production driver browser CORS
+
+The production V1 driver is served from `https://motofixug.netlify.app`. This
+origin is explicitly allowed by `app/core/cors.py` with credentialed requests
+still enabled. After changing the CORS allowlist, push the auth-service change
+and redeploy `motofix-auth-service` on Render; the running service does not
+pick up repository changes until it has deployed the new revision.
+
 ### Before Deploying
 
 - [ ] Python syntax validated ✅

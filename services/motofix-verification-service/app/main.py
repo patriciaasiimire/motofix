@@ -130,12 +130,8 @@ app = FastAPI(
 
 # ────────────────────────────── CORS ──────────────────────────────
 ALLOWED_ORIGINS = [
-    "https://admin.motofix.org",
-    "https://motofix-control-center.onrender.com",
-    "https://motofix-mechanic-connect.onrender.com",
-    "https://customer.motofix.org",
-    "https://motofix-driver-assist.onrender.com",
     "https://motofix.org",
+    "https://motofixug.netlify.app",
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8080",
@@ -174,13 +170,7 @@ app.add_middleware(
 # ────────────────────────────── HEALTH ──────────────────────────────
 @app.get("/health")
 async def health():
-    return {
-        "status": "ok",
-        "service": "motofix-mechanics-service",
-        "database": "connected" if pool else "disconnected",
-        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-    }
+    return {"status": "ok"}
 
 # ────────────────────────────── ROUTERS ──────────────────────────────
 app.include_router(auth_router.router)   # /auth/login, /auth/register, /auth/me
