@@ -173,6 +173,48 @@ async def health():
     return {"status": "ok"}
 
 
+async def _get_mechanics_with_retries(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    retry_delays = (3, 8)
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            response = await client.get(
+                url,
+                params={"verified_only": "true", "available_only": "true"},
+            )
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            if attempt == len(retry_delays):
+                raise
+            delay = retry_delays[attempt]
+            logger.warning(
+                "Mechanic Verification Service request failed (%s); retry %s/2 in %ss",
+                type(exc).__name__,
+                attempt + 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        if response.status_code in (502, 503, 504):
+            if attempt == len(retry_delays):
+                logger.error(
+                    "Mechanic Verification Service remained unavailable after retries (HTTP %s)",
+                    response.status_code,
+                )
+                return response
+            delay = retry_delays[attempt]
+            logger.warning(
+                "Mechanic Verification Service returned HTTP %s; retry %s/2 in %ss",
+                response.status_code,
+                attempt + 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+        return response
+
+    raise RuntimeError("Mechanic Verification Service retry loop ended unexpectedly")
+
+
 @app.post("/match", response_model=MatchResponse, tags=["matching"])
 async def match_mechanics(
     body: MatchRequest,
@@ -198,89 +240,43 @@ async def match_mechanics(
             )
             excluded_ids.extend(r["mechanic_id"] for r in rows)
 
-    # Fetch verified mechanics from the Mechanic Verification Service.
-    retry_delays = (3, 8)
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(60.0),
-        follow_redirects=True,
-    ) as client:
-        for attempt in range(len(retry_delays) + 1):
-            try:
-                resp = await client.get(
-                    f"{MECHANICS_SERVICE_URL}/mechanics",
-                    params={"verified_only": "true", "available_only": "true"},
-                )
-            except (httpx.ConnectError, httpx.TimeoutException) as exc:
-                if attempt == len(retry_delays):
-                    logger.error(
-                        "Mechanic Verification Service unavailable after retries: %s",
-                        type(exc).__name__,
-                    )
-                    return JSONResponse(
-                        status_code=503,
-                        content={"detail": "matching_unavailable", "retry_after": 10},
-                    )
-                delay = retry_delays[attempt]
-                logger.warning(
-                    "Mechanic Verification Service request failed; retry %s/2 in %ss",
-                    attempt + 1,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-                continue
-            except httpx.RequestError as exc:
-                logger.error(
-                    "Mechanic Verification Service request failed: %s",
-                    type(exc).__name__,
-                )
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": "matching_unavailable", "retry_after": 10},
-                )
-
+    # Fetch verified mechanics from the Mechanic Verification Service
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        try:
+            resp = await _get_mechanics_with_retries(client, f"{MECHANICS_SERVICE_URL}/mechanics")
             if resp.status_code in (502, 503, 504):
-                if attempt == len(retry_delays):
-                    logger.error(
-                        "Mechanic Verification Service remained unavailable after retries (HTTP %s)",
-                        resp.status_code,
-                    )
-                    return JSONResponse(
-                        status_code=503,
-                        content={"detail": "matching_unavailable", "retry_after": 10},
-                    )
-                delay = retry_delays[attempt]
-                logger.warning(
-                    "Mechanic Verification Service returned HTTP %s; retry %s/2 in %ss",
-                    resp.status_code,
-                    attempt + 1,
-                    delay,
-                )
-                await asyncio.sleep(delay)
-                continue
-
-            try:
-                resp.raise_for_status()
-                payload = resp.json()
-            except (httpx.HTTPStatusError, ValueError) as exc:
-                logger.error(
-                    "Mechanic Verification Service returned an invalid response: %s",
-                    type(exc).__name__,
-                )
                 return JSONResponse(
                     status_code=503,
                     content={"detail": "matching_unavailable", "retry_after": 10},
                 )
-            break
-
-        if isinstance(payload, list):
-            mechanics = payload
-        elif isinstance(payload, dict) and isinstance(payload.get("mechanics"), list):
-            mechanics = payload["mechanics"]
-        else:
-            logger.error("Mechanic Verification Service returned an invalid mechanics payload")
-            raise HTTPException(
-                status_code=502,
-                detail="Mechanic Verification Service returned an invalid mechanics list.",
+            resp.raise_for_status()
+            payload = resp.json()
+            if isinstance(payload, list):
+                mechanics = payload
+            elif isinstance(payload, dict) and isinstance(payload.get("mechanics"), list):
+                mechanics = payload["mechanics"]
+            else:
+                logger.error("Mechanic Verification Service returned an invalid mechanics payload")
+                raise HTTPException(
+                    status_code=502,
+                    detail="Mechanic Verification Service returned an invalid mechanics list.",
+                )
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "Mechanic Verification Service returned HTTP %s",
+                exc.response.status_code,
+            )
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "matching_unavailable", "retry_after": 10},
+            )
+        except httpx.RequestError as exc:
+            logger.error("Failed to reach Mechanic Verification Service: %s", type(exc).__name__)
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "matching_unavailable", "retry_after": 10},
             )
 
     # Resolve the matching area id. The v1 flow passes an integer launch-area id

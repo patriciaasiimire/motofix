@@ -2,9 +2,7 @@
 # Sends text messages (SMS) to phones — mainly the one-time codes for login/sign-up.
 # We use "Africa's Talking", an SMS provider that works well across Ugandan networks.
 #
-# Handy for development: if no API key is set, send_sms() doesn't actually send
-# anything — it just prints the message to the server log so you can still read the
-# OTP and keep testing without spending SMS credit.
+# If no API key is set, SMS delivery is skipped.
 
 import os
 import logging
@@ -37,19 +35,15 @@ def format_phone(phone: str) -> str:
 
 
 def send_sms(phone: str, message: str) -> bool:
-    """Send SMS via Africa's Talking REST API; falls back to console log if not configured."""
+    """Send SMS via Africa's Talking REST API when provider credentials are configured."""
     formatted = format_phone(phone)
-    masked_phone = formatted[-4:]
 
     if not _AT_API_KEY:
-        logger.warning(
-            "SMS provider skipped for phone ending %s: AT_API_KEY is not configured",
-            masked_phone,
-        )
+        logger.warning("SMS provider skipped: AT_API_KEY is not configured")
         return True
 
     try:
-        logger.info("Calling Africa's Talking SMS provider for phone ending %s", masked_phone)
+        logger.info("Calling Africa's Talking SMS provider")
         payload = {
             "username": _AT_USERNAME,
             "to": formatted,
@@ -73,32 +67,34 @@ def send_sms(phone: str, message: str) -> bool:
         # HTTP 201 only means Africa's Talking received the request. The real outcome for
         # the number is inside the body, so read it and log it (never the message text).
         try:
-            recipients = resp.json().get("SMSMessageData", {}).get("Recipients", []) or []
+            response_data = resp.json()
         except ValueError:
-            recipients = []
+            response_data = {}
+        message_data = response_data.get("SMSMessageData", {}) if isinstance(response_data, dict) else {}
+        recipients = message_data.get("Recipients", []) if isinstance(message_data, dict) else []
 
         if not recipients:
-            logger.error(
-                "SMS provider returned no recipient status for phone ending %s", masked_phone
-            )
+            logger.error("SMS provider returned no recipient status")
             return False
 
         delivered = True
         for recipient in recipients:
             status_text = str(recipient.get("status", "unknown"))
             status_code = recipient.get("statusCode")
-            if status_code in _AT_OK_CODES or status_text.lower() == "success":
+            cost = recipient.get("cost")
+            if status_text == "Success":
                 logger.info(
-                    "SMS provider accepted message for phone ending %s (status=%s code=%s)",
-                    masked_phone, status_text, status_code,
+                    "SMS recipient result: status=%s statusCode=%s cost=%s",
+                    status_text, status_code, cost,
                 )
             else:
-                delivered = False
-                logger.error(
-                    "SMS provider REJECTED message for phone ending %s: status=%s code=%s",
-                    masked_phone, status_text, status_code,
+                logger.warning(
+                    "SMS recipient result: status=%s statusCode=%s cost=%s",
+                    status_text, status_code, cost,
                 )
+            if status_code not in _AT_OK_CODES and status_text.lower() != "success":
+                delivered = False
         return delivered
     except Exception as exc:
-        logger.error("SMS provider call failed for phone ending %s: %s", masked_phone, exc)
+        logger.error("SMS provider call failed: %s", type(exc).__name__)
         return False

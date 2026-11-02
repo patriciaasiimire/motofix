@@ -8,7 +8,6 @@
 # few wrong tries before the code is thrown away.
 # Uses the raw asyncpg connection (database link) passed in from the router.
 
-import os
 import secrets
 import logging
 from datetime import datetime, timedelta, timezone
@@ -22,12 +21,6 @@ MAX_ATTEMPTS       = 5
 # already stored instead of replacing it. The app retries when a sleeping server is slow
 # to answer, and without this every retry would invalidate the SMS the user just got.
 OTP_REUSE_SECONDS = 60
-
-# Printing OTPs in the logs is for local development ONLY. Anyone who can read the
-# production logs could otherwise log in as any user, so it is off unless explicitly
-# enabled with DEBUG_LOG_OTP=true.
-_LOG_OTP = os.getenv("DEBUG_LOG_OTP", "").strip().lower() == "true"
-
 
 def generate_otp() -> str:
     """Return a cryptographically secure 6-digit OTP string."""
@@ -63,9 +56,7 @@ async def store_otp(
         """,
         phone, otp, now, expires_at, pending_full_name, pending_number_plate,
     )
-    logger.debug("OTP stored for phone ending %s (expires %s)", phone[-4:], expires_at)
-    if _LOG_OTP:
-        logger.info("🔑 DEV OTP for %s: %s", phone, otp)
+    logger.info("OTP generated and stored")
 
 
 async def get_recent_otp(conn, phone: str) -> str | None:

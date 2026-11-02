@@ -645,7 +645,6 @@ async def reverse_geocode(lat: float, lon: float):
 
 @app.get("/health")
 async def health_check():
-    """Lightweight health check that does not depend on the database."""
     return {"status": "ok"}
 
 
@@ -658,19 +657,26 @@ async def _post_matching_with_retries(
     for attempt in range(len(retry_delays) + 1):
         try:
             response = await client.post(url, **kwargs)
-        except (httpx.ConnectError, httpx.TimeoutException):
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
             if attempt == len(retry_delays):
                 raise
             delay = retry_delays[attempt]
             logger.warning(
-                "Matching service request failed; retry %s/2 in %ss",
+                "Matching service request failed (%s); retry %s/2 in %ss",
+                type(exc).__name__,
                 attempt + 1,
                 delay,
             )
             await asyncio.sleep(delay)
             continue
 
-        if response.status_code in (502, 503, 504) and attempt < len(retry_delays):
+        if response.status_code in (502, 503, 504):
+            if attempt == len(retry_delays):
+                logger.error(
+                    "Matching service remained unavailable after retries (HTTP %s)",
+                    response.status_code,
+                )
+                return response
             delay = retry_delays[attempt]
             logger.warning(
                 "Matching service returned HTTP %s; retry %s/2 in %ss",
@@ -1109,7 +1115,7 @@ async def _dispatch_to_matched_mechanics(
         if area_id is not None:
             match_body["area_id"] = area_id
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             resp = await _post_matching_with_retries(
                 client,
                 f"{matching_url}/match",
@@ -1845,7 +1851,7 @@ async def get_request_matches(
 
     matching_url = os.getenv("MATCHING_SERVICE_URL", "http://127.0.0.1:8003").rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             response = await _post_matching_with_retries(
                 client,
                 f"{matching_url}/match",

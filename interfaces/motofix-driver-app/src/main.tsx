@@ -25,6 +25,7 @@ L.Icon.Default.mergeOptions({
 // auth, dispatch, matching and mechanic verification are all awake.
 const warmAll = () => warmServices([AUTH_BASE_URL, REQUESTS_BASE_URL, MATCHING_BASE_URL, MECHANICS_BASE_URL]);
 warmAll();
+window.setInterval(warmAll, 5 * 60 * 1000);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") warmAll(); // throttled to once per 5 minutes
 });

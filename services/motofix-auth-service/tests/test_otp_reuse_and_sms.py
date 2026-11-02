@@ -1,7 +1,7 @@
 """
 Tests for:
   * get_recent_otp()  - a retried "send code" request re-uses the still-valid code
-  * store_otp()       - OTP codes are only written to the logs when DEBUG_LOG_OTP=true
+  * store_otp()       - OTP codes are never written to the logs
   * send_sms()        - the Africa's Talking per-recipient status decides success
 
 These modules are loaded straight from their files so the tests do not need a
@@ -102,30 +102,39 @@ class _ListHandler(logging.Handler):
         self.messages.append(record.getMessage())
 
 
-def _store_and_collect_logs(log_otp: bool):
+def _store_and_collect_logs():
     handler = _ListHandler()
     otp.logger.addHandler(handler)
     previous_level = otp.logger.level
     otp.logger.setLevel(logging.DEBUG)
-    previous_flag = otp._LOG_OTP
-    otp._LOG_OTP = log_otp
     try:
         asyncio.run(otp.store_otp(FakeConn(), "+256700000001", "987654"))
     finally:
-        otp._LOG_OTP = previous_flag
         otp.logger.setLevel(previous_level)
         otp.logger.removeHandler(handler)
     return handler.messages
 
 
-def test_otp_not_logged_by_default():
-    messages = _store_and_collect_logs(log_otp=False)
+def test_otp_is_never_logged():
+    messages = _store_and_collect_logs()
     assert not any("987654" in m for m in messages)
 
 
-def test_otp_logged_only_when_enabled():
-    messages = _store_and_collect_logs(log_otp=True)
-    assert any("987654" in m for m in messages)
+def test_otp_storage_logs_generation_without_exposing_code_or_phone():
+    handler = _ListHandler()
+    otp.logger.addHandler(handler)
+    previous_level = otp.logger.level
+    otp.logger.setLevel(logging.INFO)
+    code = otp.generate_otp()
+    try:
+        asyncio.run(otp.store_otp(FakeConn(), "+256700000001", code))
+    finally:
+        otp.logger.setLevel(previous_level)
+        otp.logger.removeHandler(handler)
+
+    assert "OTP generated and stored" in handler.messages
+    assert code not in "\n".join(handler.messages)
+    assert "+256700000001" not in "\n".join(handler.messages)
 
 
 # ── send_sms ────────────────────────────────────────────────────────────────
@@ -175,12 +184,40 @@ def _run_send_sms(body, sender_id=""):
 
 
 def _body(status, code):
-    return {"SMSMessageData": {"Recipients": [{"number": "+256700000001", "status": status, "statusCode": code}]}}
+    return {
+        "SMSMessageData": {
+            "Recipients": [{
+                "number": "+256700000001",
+                "status": status,
+                "statusCode": code,
+                "cost": "UGX 50.00",
+            }]
+        }
+    }
 
 
 def test_sms_success_status_returns_true():
     ok, _ = _run_send_sms(_body("Success", 101))
     assert ok is True
+
+
+def test_sms_recipient_log_has_delivery_details_without_phone_or_otp():
+    handler = _ListHandler()
+    sms.logger.addHandler(handler)
+    previous_level = sms.logger.level
+    sms.logger.setLevel(logging.INFO)
+    try:
+        _run_send_sms(_body("Success", 101))
+    finally:
+        sms.logger.setLevel(previous_level)
+        sms.logger.removeHandler(handler)
+
+    message = "\n".join(handler.messages)
+    assert "status=Success" in message
+    assert "statusCode=101" in message
+    assert "cost=UGX 50.00" in message
+    assert "+256700000001" not in message
+    assert "111111" not in message
 
 
 def test_sms_insufficient_balance_returns_false():

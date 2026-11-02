@@ -589,8 +589,10 @@ export default function RequestDetail() {
 
   const [request, setRequest] = useState<Request | null>(null);
   const [matchedMechanics, setMatchedMechanics] = useState<RequestMechanicMatch[]>([]);
-  const [matchesLoading, setMatchesLoading] = useState(false);
+  const [matchesLoading, setMatchesLoading] = useState(true);
   const [matchesError, setMatchesError] = useState<string | null>(null);
+  const [matchRetryAttempt, setMatchRetryAttempt] = useState(0);
+  const [isWaitingForMatchRetry, setIsWaitingForMatchRetry] = useState(false);
   const jobTypeLabel = /tow|recovery/i.test(request?.service_type ?? '') ? 'Tow / recovery' : 'Roadside assist';
   const [isLoading, setIsLoading] = useState(true);
   const [isCalling, setIsCalling] = useState(false);
@@ -777,6 +779,23 @@ export default function RequestDetail() {
       setMatchesLoading(false);
     }
   }, [id]);
+
+  useEffect(() => {
+    if (!matchesError || matchRetryAttempt >= 4) {
+      setIsWaitingForMatchRetry(false);
+      return;
+    }
+
+    const delayMs = (matchRetryAttempt + 1) * 5_000;
+    setIsWaitingForMatchRetry(true);
+    setMatchesLoading(true);
+    const timer = setTimeout(() => {
+      setIsWaitingForMatchRetry(false);
+      setMatchRetryAttempt((attempt) => attempt + 1);
+      void loadMatches();
+    }, delayMs);
+    return () => clearTimeout(timer);
+  }, [loadMatches, matchRetryAttempt, matchesError]);
 
   useEffect(() => {
     if (request && ['pending', 'searching'].includes(request.status)) {
@@ -1314,7 +1333,10 @@ export default function RequestDetail() {
             <h2 className="text-base font-bold text-foreground">Mechanics in this area</h2>
             {matchesLoading ? (
               <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Finding verified, available mechanics…
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {isWaitingForMatchRetry
+                  ? 'Finding mechanics, services are waking up...'
+                  : 'Finding verified, available mechanics…'}
               </div>
             ) : matchedMechanics.length > 0 ? (
               <ul className="mt-3 space-y-3">
@@ -1340,16 +1362,41 @@ export default function RequestDetail() {
             ) : (
               <div className="mt-3">
                 <p className="text-sm text-muted-foreground">
-                  {matchesError ?? 'No mechanics available in this area yet'}
+                  {matchesError ?? 'No mechanics nearby yet'}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void loadMatches()}
-                    className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground"
-                  >
-                    {matchesError ? 'Retry' : 'Try matching again'}
-                  </button>
+                  {matchesError ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMatchRetryAttempt(0);
+                        void loadMatches();
+                      }}
+                      className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground"
+                    >
+                      Retry
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMatchRetryAttempt(0);
+                          void loadMatches();
+                        }}
+                        className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground"
+                      >
+                        Try matching again
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => navigate('/contact-support')}
+                        className="min-h-11 rounded-xl border border-border px-4 text-sm font-semibold text-foreground"
+                      >
+                        Call support
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => void handleChangeArea()}
