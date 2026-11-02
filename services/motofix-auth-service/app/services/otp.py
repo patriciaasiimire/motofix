@@ -24,6 +24,7 @@ OTP_REUSE_SECONDS = 60
 
 def generate_otp() -> str:
     """Return a cryptographically secure 6-digit OTP string."""
+    logger.info("OTP generated")
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
@@ -56,7 +57,6 @@ async def store_otp(
         """,
         phone, otp, now, expires_at, pending_full_name, pending_number_plate,
     )
-    logger.info("OTP generated and stored")
 
 
 async def get_recent_otp(conn, phone: str) -> str | None:

@@ -35,8 +35,12 @@ then trigger a new production deploy so Vite bakes them into the site. OTP
 registration, login, and resend requests use the auth URL only.
 
 After changing CORS in `services/motofix-auth-service`, push the change and
-redeploy `motofix-auth-service` on Render before retrying browser OTP. For a
-demo, open each Render service's `/docs` page once to wake free-tier services.
+**manually redeploy `motofix-auth-service` on Render**; a repository push alone
+does not update the running service. For an APK OTP test, install the new
+Actions APK (uninstall the old app first), open
+`https://motofix-auth.onrender.com/docs` on the phone once to wake the service,
+then tap **Send login code** and confirm the POST appears in Render auth logs.
+For a demo, open each Render service's `/docs` page once to wake free-tier services.
 An `ERR_NAME_NOT_RESOLVED` may be caused by the device's or ISP's DNS; switching
 the device DNS to `1.1.1.1` can help, but DNS failures must not prevent login UI
 or GET HELP from rendering.

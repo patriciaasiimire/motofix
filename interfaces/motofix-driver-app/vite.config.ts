@@ -27,9 +27,8 @@ export default defineConfig(({ mode }) => {
     }
     if (
       parsedAuthUrl.protocol !== 'https:' ||
-      parsedAuthUrl.hostname === 'localhost' ||
-      parsedAuthUrl.hostname.endsWith('.localhost') ||
-      parsedAuthUrl.hostname === '127.0.0.1'
+      parsedAuthUrl.hostname.includes('localhost') ||
+      parsedAuthUrl.hostname.includes('127.0.0.1')
     ) {
       throw new Error('Production VITE_API_AUTH_URL must use HTTPS and cannot point to localhost or 127.0.0.1.');
     }

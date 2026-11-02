@@ -132,7 +132,7 @@ def test_otp_storage_logs_generation_without_exposing_code_or_phone():
         otp.logger.setLevel(previous_level)
         otp.logger.removeHandler(handler)
 
-    assert "OTP generated and stored" in handler.messages
+    assert "OTP generated" in handler.messages
     assert code not in "\n".join(handler.messages)
     assert "+256700000001" not in "\n".join(handler.messages)
 

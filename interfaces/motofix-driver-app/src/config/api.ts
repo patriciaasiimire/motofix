@@ -34,7 +34,12 @@ let activeNetworkRetryRequests = 0;
 // retry chain every few seconds. Beyond this many at once, new failures just fail.
 const MAX_CONCURRENT_RETRY_CHAINS = 8;
 
-function setNetworkRetryNotice(config: axios.InternalAxiosRequestConfig, active: boolean) {
+function setNetworkRetryNotice(
+  config: axios.InternalAxiosRequestConfig,
+  active: boolean,
+  enabled: boolean,
+) {
+  if (!enabled) return;
   if (
     config.__networkRetryNoticeActive === active ||
     (!active && !config.__networkRetryNoticeActive)
@@ -61,9 +66,8 @@ if (import.meta.env.PROD) {
   }
   if (
     authUrl.protocol !== 'https:' ||
-    authUrl.hostname === 'localhost' ||
-    authUrl.hostname.endsWith('.localhost') ||
-    authUrl.hostname === '127.0.0.1'
+    authUrl.hostname.includes('localhost') ||
+    authUrl.hostname.includes('127.0.0.1')
   ) {
     throw new Error('Production VITE_API_AUTH_URL must be HTTPS and must not use localhost or 127.0.0.1.');
   }
@@ -95,7 +99,7 @@ export const authApi = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true, // send/receive httpOnly cookies from the API
-  timeout: 30000, // 30s for slow networks
+  timeout: 30000, // 30s for slow networks; OTP operations override this for Render cold starts.
 });
 
 export const requestsApi = axios.create({
@@ -165,7 +169,7 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
 
   instance.interceptors.response.use(
     (response) => {
-      setNetworkRetryNotice(response.config, false);
+      setNetworkRetryNotice(response.config, false, instance === authApi);
       // Keep the device's clock in step with the server (for the journey sim).
       noteServerDate(response.headers?.['date']);
       debugLog(`📥 Response from ${response.config.url}:`, response.status);
@@ -193,22 +197,24 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
         : null;
       if (config && retryDelay !== null) {
         config.__networkRetryCount = retryCount + 1;
-        setNetworkRetryNotice(config, true);
+        setNetworkRetryNotice(config, true, instance === authApi);
         debugLog(`[api] Server not ready; retry ${retryCount + 1} in ${retryDelay}ms.`);
         return new Promise((resolve) => setTimeout(resolve, retryDelay))
           .then(() => instance.request(config));
       }
-      if (config) setNetworkRetryNotice(config, false);
-      console.error('❌ Response error:', {
-        status: error.response?.status,
-        url: error.config?.url,
-        fullUrl: error.config?.baseURL
-          ? `${error.config.baseURL.replace(/\/$/, '')}/${(error.config.url || '').replace(/^\//, '')}`
-          : error.config?.url,
-        method: error.config?.method,
-        code: error.code,
-        message: error.message,
-      });
+      if (config) setNetworkRetryNotice(config, false, instance === authApi);
+      if (import.meta.env.DEV) {
+        console.error('❌ Response error:', {
+          status: error.response?.status,
+          url: error.config?.url,
+          fullUrl: error.config?.baseURL
+            ? `${error.config.baseURL.replace(/\/$/, '')}/${(error.config.url || '').replace(/^\//, '')}`
+            : error.config?.url,
+          method: error.config?.method,
+          code: error.code,
+          message: error.message,
+        });
+      }
       
       return Promise.reject(error);
     }
@@ -232,7 +238,7 @@ export function getAuthErrorMessage(error: unknown): string {
     error.response?.status === 408 ||
     error.response?.status === 504
   ) {
-    return 'Server is waking up, please try again in a moment';
+    return 'The server timed out. Please try again';
   }
   if (error.response && error.response.status >= 500) {
     return 'Server error, please try again';
@@ -247,7 +253,7 @@ export function getAuthErrorMessage(error: unknown): string {
     return `Request failed (HTTP ${error.response.status})`;
   }
   if (!error.response) {
-    return "Can't reach the server. It may still be waking up. Wait a minute and try again, or check your connection";
+    return "Can't reach the server. Check your connection";
   }
   return error.message || 'Server error, please try again';
 }
@@ -265,10 +271,10 @@ export const authService = {
     authApi.post('/auth/verify-otp', {
       phone,
       otp_code: otp,
-    }),
+    }, { timeout: 60_000 }),
 
   resendOtp: (phone: string) =>
-    authApi.post('/auth/resend-otp', { phone }),
+    authApi.post('/auth/resend-otp', { phone }, { timeout: 60_000 }),
 
   logout: () => authApi.post('/auth/logout'),
 

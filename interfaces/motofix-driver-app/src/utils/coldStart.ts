@@ -12,6 +12,9 @@
 /** Waits between retries for requests that are safe to repeat (~57s of waiting). */
 export const WAKE_RETRY_DELAYS_MS = [2_000, 4_000, 6_000, 8_000, 10_000, 12_000, 15_000] as const;
 
+/** OTP requests can each take 60s while Render wakes, so allow two full retries. */
+export const OTP_RETRY_DELAYS_MS = [3_000, 8_000] as const;
+
 /** Waits for requests that must NOT be repeated many times (e.g. creating a job). */
 export const SHORT_RETRY_DELAYS_MS = [3_000, 8_000] as const;
 
@@ -50,7 +53,7 @@ function normalizePath(url?: string): string {
 
 function scheduleFor(method: string, url?: string): readonly number[] {
   if (method === 'get' || method === 'head') return WAKE_RETRY_DELAYS_MS;
-  if (method === 'post' && SAFE_TO_REPEAT_POSTS.has(normalizePath(url))) return WAKE_RETRY_DELAYS_MS;
+  if (method === 'post' && SAFE_TO_REPEAT_POSTS.has(normalizePath(url))) return OTP_RETRY_DELAYS_MS;
   return SHORT_RETRY_DELAYS_MS;
 }
 
@@ -69,6 +72,9 @@ export function getWakeRetryDelayMs(input: RetryInput): number | null {
     delay = Math.max(delay, Math.min(input.retryAfterSeconds * 1_000, 15_000));
   }
 
-  if (input.elapsedMs + delay > WAKE_MAX_TOTAL_MS) return null;
+  const maxTotalMs = schedule === OTP_RETRY_DELAYS_MS
+    ? 200_000
+    : WAKE_MAX_TOTAL_MS;
+  if (input.elapsedMs + delay > maxTotalMs) return null;
   return delay;
 }

@@ -108,7 +108,16 @@ jobs:
             exit 1
           }
           ls -la dist
+          grep -R -Fq 'https://motofix-auth.onrender.com' dist/assets --include='*.js' || {
+            echo "::error::Production JavaScript bundle does not contain the MotoFix auth URL."
+            exit 1
+          }
+          if grep -R -E -q 'https?://(127\.0\.0\.1(:[0-9]+)?|localhost(:[0-9]+|/))' dist/assets --include='*.js'; then
+            echo "::error::Production JavaScript bundle contains a localhost API host."
+            exit 1
+          fi
           echo "Vite output exists: $(find dist -type f | wc -l) files in dist/." >> "$GITHUB_STEP_SUMMARY"
+          echo "Production auth URL is present and localhost API hosts are absent from the JavaScript bundle." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate Android project if missing
         shell: bash
