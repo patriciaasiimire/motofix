@@ -26,11 +26,12 @@ export default defineConfig(({ mode }) => {
       throw new Error('VITE_API_AUTH_URL must be a valid HTTPS URL in production.');
     }
     if (
-      parsedAuthUrl.protocol !== 'https:' ||
-      parsedAuthUrl.hostname.includes('localhost') ||
-      parsedAuthUrl.hostname.includes('127.0.0.1')
+      parsedAuthUrl.origin !== 'https://motofix-auth.onrender.com' ||
+      parsedAuthUrl.pathname !== '/' ||
+      parsedAuthUrl.search ||
+      parsedAuthUrl.hash
     ) {
-      throw new Error('Production VITE_API_AUTH_URL must use HTTPS and cannot point to localhost or 127.0.0.1.');
+      throw new Error('Production VITE_API_AUTH_URL must be https://motofix-auth.onrender.com.');
     }
   }
 

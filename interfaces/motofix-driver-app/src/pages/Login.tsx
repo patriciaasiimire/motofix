@@ -6,7 +6,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Phone, KeyRound, ArrowRight, Loader2, ArrowLeft, Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { authService, getAuthErrorMessage } from '@/config/api';
+import { authService, getAuthErrorDiagnostics, getAuthErrorMessage } from '@/config/api';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -21,6 +21,9 @@ export default function Login() {
   const cooldownRef               = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigate    = useNavigate();
   const location    = useLocation();
+  const [authFailureDetails, setAuthFailureDetails] = useState<string | null>(
+    (location.state as { authFailureDetails?: string } | null)?.authFailureDetails ?? null,
+  );
   // Back-button landed here while already signed in → go Home, don't force re-login.
   useEffect(() => { if (localStorage.getItem('motofix_token')) navigate('/requests', { replace: true }); }, [navigate]);
 
@@ -56,6 +59,7 @@ export default function Login() {
       toast.error('Please use the same number you registered with: ' + lockedPhone);
       return;
     }
+    setAuthFailureDetails(null);
     setLoading(true);
     try {
       const res = await authService.sendOtp(fmt);
@@ -65,12 +69,14 @@ export default function Login() {
       const msg: string = res.data?.message ?? '';
       toast.success(msg || 'OTP sent to your phone', { duration: 5000 });
     } catch (err: unknown) {
+      setAuthFailureDetails(getAuthErrorDiagnostics(err));
       toast.error(getAuthErrorMessage(err));
     } finally { setLoading(false); }
   };
 
   const handleResend = async () => {
     if (cooldown > 0 || resending) return;
+    setAuthFailureDetails(null);
     setResending(true);
     try {
       let res;
@@ -88,6 +94,7 @@ export default function Login() {
       startCooldown();
       toast.success(msg || 'New code sent to your phone', { duration: 5000 });
     } catch (err: unknown) {
+      setAuthFailureDetails(getAuthErrorDiagnostics(err));
       toast.error(getAuthErrorMessage(err));
     } finally { setResending(false); }
   };
@@ -217,6 +224,11 @@ export default function Login() {
                 </div>
               </div>
             </form>
+          )}
+          {import.meta.env.DEV && authFailureDetails && (
+            <pre className="mt-4 whitespace-pre-wrap break-all rounded-lg bg-black/10 p-3 text-xs text-muted-foreground">
+              {authFailureDetails}
+            </pre>
           )}
         </div>
 

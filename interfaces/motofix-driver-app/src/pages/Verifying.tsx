@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import { authService, getAuthErrorMessage } from '@/config/api';
+import { authService, getAuthErrorDiagnostics, getAuthErrorMessage } from '@/config/api';
 import { toast } from 'sonner';
 import { PROFILE_COMPLETE_KEY } from './Onboarding';
 
@@ -77,7 +77,10 @@ export default function Verifying() {
       .catch((err: unknown) => {
         errored.current = true;
         toast.error(getAuthErrorMessage(err));
-        navigate('/login', { replace: true });
+        navigate('/login', {
+          replace: true,
+          state: { authFailureDetails: getAuthErrorDiagnostics(err) },
+        });
       });
   // This verification should run once for the OTP payload received in route state.
   // eslint-disable-next-line react-hooks/exhaustive-deps

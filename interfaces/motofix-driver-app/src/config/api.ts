@@ -65,11 +65,12 @@ if (import.meta.env.PROD) {
     throw new Error('Production build requires a valid VITE_API_AUTH_URL.');
   }
   if (
-    authUrl.protocol !== 'https:' ||
-    authUrl.hostname.includes('localhost') ||
-    authUrl.hostname.includes('127.0.0.1')
+    authUrl.origin !== 'https://motofix-auth.onrender.com' ||
+    authUrl.pathname !== '/' ||
+    authUrl.search ||
+    authUrl.hash
   ) {
-    throw new Error('Production VITE_API_AUTH_URL must be HTTPS and must not use localhost or 127.0.0.1.');
+    throw new Error('Production VITE_API_AUTH_URL must be https://motofix-auth.onrender.com.');
   }
 }
 export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_URL, 'https://motofix-dispatch.onrender.com');
@@ -101,6 +102,11 @@ export const authApi = axios.create({
   withCredentials: true, // send/receive httpOnly cookies from the API
   timeout: 30000, // 30s for slow networks; OTP operations override this for Render cold starts.
 });
+
+function authEndpoint(path: string): string {
+  if (!AUTH_BASE_URL) return path;
+  return new URL(path.replace(/^\/+/, ''), `${AUTH_BASE_URL.replace(/\/+$/, '')}/`).href;
+}
 
 export const requestsApi = axios.create({
   baseURL: REQUESTS_BASE_URL,
@@ -204,16 +210,17 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
       }
       if (config) setNetworkRetryNotice(config, false, instance === authApi);
       if (import.meta.env.DEV) {
-        console.error('❌ Response error:', {
+        const failure = {
           status: error.response?.status,
           url: error.config?.url,
-          fullUrl: error.config?.baseURL
-            ? `${error.config.baseURL.replace(/\/$/, '')}/${(error.config.url || '').replace(/^\//, '')}`
-            : error.config?.url,
+          fullUrl: error.config?.url
+            ? new URL(error.config.url, error.config.baseURL || window.location.href).href
+            : error.config?.baseURL,
           method: error.config?.method,
           code: error.code,
           message: error.message,
-        });
+        };
+        console.error('❌ Response error:', failure);
       }
       
       return Promise.reject(error);
@@ -258,23 +265,43 @@ export function getAuthErrorMessage(error: unknown): string {
   return error.message || 'Server error, please try again';
 }
 
+export function getAuthErrorDiagnostics(error: unknown): string | null {
+  if (!axios.isAxiosError(error)) return null;
+  const config = error.config;
+  let url = config?.url ?? 'unknown';
+  if (config?.url) {
+    try {
+      url = new URL(config.url, config.baseURL || window.location.href).href;
+    } catch {
+      url = `${config.baseURL}${config.url}`;
+    }
+  }
+  return [
+    `Method: ${(config?.method ?? 'unknown').toUpperCase()}`,
+    `URL: ${url}`,
+    `Status: ${error.response?.status ?? 'no response'}`,
+    `Axios code: ${error.code ?? 'none'}`,
+    `Message: ${error.message}`,
+  ].join('\n');
+}
+
 // Auth API functions
 export const authService = {
   sendOtp: (phone: string, fullName?: string, numberPlate?: string) =>
-    authApi.post('/auth/register/driver', {
+    authApi.post(authEndpoint('/auth/register/driver'), {
         phone,
         ...(fullName    ? { full_name:    fullName }                         : {}),
         ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
       }, { timeout: 60_000 }),
 
   login: (phone: string, otp: string) =>
-    authApi.post('/auth/verify-otp', {
+    authApi.post(authEndpoint('/auth/verify-otp'), {
       phone,
       otp_code: otp,
     }, { timeout: 60_000 }),
 
   resendOtp: (phone: string) =>
-    authApi.post('/auth/resend-otp', { phone }, { timeout: 60_000 }),
+    authApi.post(authEndpoint('/auth/resend-otp'), { phone }, { timeout: 60_000 }),
 
   logout: () => authApi.post('/auth/logout'),
 

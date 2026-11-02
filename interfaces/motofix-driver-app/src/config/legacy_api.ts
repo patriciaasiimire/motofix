@@ -96,23 +96,32 @@ addAuthInterceptor(authApi);
 addAuthInterceptor(requestsApi);
 addAuthInterceptor(paymentsApi);
 
+const authOtpUrl = (path: string) =>
+  AUTH_BASE_URL
+    ? new URL(path.replace(/^\/+/, ""), `${AUTH_BASE_URL.replace(/\/+$/, "")}/`).href
+    : path;
+
 // Auth API functions
 export const authService = {
   sendOtp: (phone: string, fullName?: string, numberPlate?: string) =>
-    authApi.post("/auth/register/driver", {
+    authApi.post(authOtpUrl("/auth/register/driver"), {
       phone,
       ...(fullName ? { full_name: fullName } : {}),
       ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
-    }),
+    }, { timeout: 60_000 }),
 
   login: (phone: string, otp: string, fullName?: string) =>
-    authApi.post("/auth/verify-otp", {
+    authApi.post(authOtpUrl("/auth/verify-otp"), {
       phone,
       otp_code: otp,
       ...(fullName ? { full_name: fullName } : {}),
-    }),
+    }, { timeout: 60_000 }),
 
-  resendOtp: (phone: string) => authApi.post("/auth/resend-otp", { phone }),
+  resendOtp: (phone: string) => authApi.post(
+    authOtpUrl("/auth/resend-otp"),
+    { phone },
+    { timeout: 60_000 },
+  ),
 
   logout: () => authApi.post("/auth/logout"),
 

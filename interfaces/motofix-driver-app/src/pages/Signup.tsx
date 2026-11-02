@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { User, Phone, Car, ArrowRight, ArrowLeft, Loader2, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { authService, getAuthErrorMessage } from "@/config/api";
+import { authService, getAuthErrorDiagnostics, getAuthErrorMessage } from "@/config/api";
 import { toast } from "sonner";
 import axios from "axios";
 
@@ -51,6 +51,7 @@ export default function Signup() {
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+  const [authFailureDetails, setAuthFailureDetails] = useState<string | null>(null);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Form values
@@ -84,6 +85,7 @@ export default function Signup() {
 
   const handleResend = async () => {
     if (cooldown > 0 || resending) return;
+    setAuthFailureDetails(null);
     setResending(true);
     try {
       let res;
@@ -99,6 +101,7 @@ export default function Signup() {
       startCooldown();
       toast.success(res.data?.message ?? "New verification code sent", { duration: 5000 });
     } catch (err: unknown) {
+      setAuthFailureDetails(getAuthErrorDiagnostics(err));
       toast.error(getAuthErrorMessage(err));
     } finally {
       setResending(false);
@@ -134,6 +137,7 @@ export default function Signup() {
       return;
     }
 
+    setAuthFailureDetails(null);
     setLoading(true);
     try {
       const res = await authService.sendOtp(fmt, name, numberPlate.trim() || undefined);
@@ -142,6 +146,7 @@ export default function Signup() {
       startCooldown();
       toast.success(res.data?.message ?? "Verification code sent", { duration: 5000 });
     } catch (err: unknown) {
+      setAuthFailureDetails(getAuthErrorDiagnostics(err));
       toast.error(getAuthErrorMessage(err));
     } finally {
       setLoading(false);
@@ -206,6 +211,11 @@ export default function Signup() {
               Enter the 6-digit code sent to <span className="text-foreground font-semibold">{phone}</span>.
             </p>
           </>
+        )}
+        {import.meta.env.DEV && authFailureDetails && (
+          <pre className="mt-4 whitespace-pre-wrap break-all rounded-lg bg-black/10 p-3 text-xs text-muted-foreground">
+            {authFailureDetails}
+          </pre>
         )}
       </div>
 

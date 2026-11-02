@@ -47,7 +47,14 @@ export function isWakeFailure(input: Pick<RetryInput, 'hasResponse' | 'status' |
 }
 
 function normalizePath(url?: string): string {
-  const path = (url ?? '').split('?')[0].replace(/\/+$/, '');
+  const rawUrl = url ?? '';
+  let path: string;
+  try {
+    path = new URL(rawUrl).pathname;
+  } catch {
+    path = rawUrl.split('?')[0];
+  }
+  path = path.replace(/\/+$/, '');
   return path.startsWith('/') ? path : `/${path}`;
 }
 
@@ -61,9 +68,15 @@ function scheduleFor(method: string, url?: string): readonly number[] {
  * How long to wait before retrying, in milliseconds, or null to stop and show the error.
  */
 export function getWakeRetryDelayMs(input: RetryInput): number | null {
-  if (!isWakeFailure(input)) return null;
+  const method = (input.method ?? 'get').toLowerCase();
+  const path = normalizePath(input.url);
+  const isOtpPost = method === 'post' && SAFE_TO_REPEAT_POSTS.has(path);
+  const retryable = isOtpPost
+    ? (!input.hasResponse && input.code !== 'ERR_CANCELED') || input.status === 503
+    : isWakeFailure(input);
+  if (!retryable) return null;
 
-  const schedule = scheduleFor((input.method ?? 'get').toLowerCase(), input.url);
+  const schedule = scheduleFor(method, input.url);
   if (input.attempt >= schedule.length) return null;
 
   let delay = schedule[input.attempt];

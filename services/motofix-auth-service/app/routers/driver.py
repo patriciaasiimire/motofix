@@ -73,6 +73,7 @@ async def register_driver(body: DriverRegisterRequest, request: Request, backgro
     Generates a 6-digit OTP, stores it in DB, and delivers it via SMS.
     The driver then calls /auth/verify-otp to complete login.
     """
+    logger.info("Driver register OTP request received")
     phone = format_phone(body.phone)
     pool  = await _get_conn(request)
 
@@ -344,6 +345,7 @@ async def resend_otp(body: PhoneRequest, request: Request, background_tasks: Bac
     Generate and send a fresh OTP for an existing user.
     Invalidates any previous OTP for the same number.
     """
+    logger.info("Driver resend OTP request received")
     phone = format_phone(body.phone)
     pool  = await _get_conn(request)
 

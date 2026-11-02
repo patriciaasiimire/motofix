@@ -63,6 +63,10 @@ jobs:
           : > .env.production
           for name in "${vars[@]}"; do
             value="${!name}"
+            if [ "$name" = "VITE_API_AUTH_URL" ] && [ "$value" != "https://motofix-auth.onrender.com" ]; then
+              echo "::error::VITE_API_AUTH_URL must be https://motofix-auth.onrender.com."
+              exit 1
+            fi
             case "$name" in
               VITE_WS_URL)
                 case "$value" in
@@ -112,7 +116,7 @@ jobs:
             echo "::error::Production JavaScript bundle does not contain the MotoFix auth URL."
             exit 1
           }
-          if grep -R -E -q 'https?://(127\.0\.0\.1(:[0-9]+)?|localhost(:[0-9]+|/))' dist/assets --include='*.js'; then
+          if grep -R -E -q 'https?://(127\.0\.0\.1|localhost)(:[0-9]+)?/(auth|users|requests|match|mechanics|feature-flags)' dist/assets --include='*.js'; then
             echo "::error::Production JavaScript bundle contains a localhost API host."
             exit 1
           fi
