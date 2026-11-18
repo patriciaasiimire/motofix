@@ -65,12 +65,13 @@ if (import.meta.env.PROD) {
     throw new Error('Production build requires a valid VITE_API_AUTH_URL.');
   }
   if (
-    authUrl.origin !== 'https://motofix-auth.onrender.com' ||
+    authUrl.protocol !== 'https:' ||
+    ['localhost', '127.0.0.1', '::1'].includes(authUrl.hostname) ||
     authUrl.pathname !== '/' ||
     authUrl.search ||
     authUrl.hash
   ) {
-    throw new Error('Production VITE_API_AUTH_URL must be https://motofix-auth.onrender.com.');
+    throw new Error('Production VITE_API_AUTH_URL must be a public HTTPS origin.');
   }
 }
 export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_URL, 'https://motofix-dispatch.onrender.com');

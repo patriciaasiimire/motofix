@@ -63,10 +63,6 @@ jobs:
           : > .env.production
           for name in "${vars[@]}"; do
             value="${!name}"
-            if [ "$name" = "VITE_API_AUTH_URL" ] && [ "$value" != "https://motofix-auth.onrender.com" ]; then
-              echo "::error::VITE_API_AUTH_URL must be https://motofix-auth.onrender.com."
-              exit 1
-            fi
             case "$name" in
               VITE_WS_URL)
                 case "$value" in
@@ -106,14 +102,16 @@ jobs:
         run: npm run build
 
       - name: Verify web assets before Capacitor sync
+        env:
+          VITE_API_AUTH_URL: ${{ vars.VITE_API_AUTH_URL || secrets.VITE_API_AUTH_URL || 'https://motofix-auth.onrender.com' }}
         run: |
           test -s dist/index.html || {
             echo "::error::Vite build did not create dist/index.html."
             exit 1
           }
           ls -la dist
-          grep -R -Fq 'https://motofix-auth.onrender.com' dist/assets --include='*.js' || {
-            echo "::error::Production JavaScript bundle does not contain the MotoFix auth URL."
+          grep -R -Fq "$VITE_API_AUTH_URL" dist/assets --include='*.js' || {
+            echo "::error::Production JavaScript bundle does not contain the configured MotoFix auth URL."
             exit 1
           }
           if grep -R -E -q 'https?://(127\.0\.0\.1|localhost)(:[0-9]+)?/(auth|users|requests|match|mechanics|feature-flags)' dist/assets --include='*.js'; then
@@ -121,7 +119,7 @@ jobs:
             exit 1
           fi
           echo "Vite output exists: $(find dist -type f | wc -l) files in dist/." >> "$GITHUB_STEP_SUMMARY"
-          echo "Production auth URL is present and localhost API hosts are absent from the JavaScript bundle." >> "$GITHUB_STEP_SUMMARY"
+          echo "Configured auth URL is present and localhost API hosts are absent from the JavaScript bundle." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Generate Android project if missing
         shell: bash
