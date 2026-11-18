@@ -788,21 +788,8 @@ export const deleteAdmin = async (id: number): Promise<void> => {
 // Auth
 // Calls backend login endpoint, stores token, and returns token info
 export const adminLogin = async (email: string, password: string): Promise<{ access_token: string; token_type: string }> => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
-  const response = await fetch(`/auth/login/admin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-    signal: controller.signal,
-  });
-  clearTimeout(timer);
-
-  if (!response.ok) {
-    throw new ApiError(response.status, 'Invalid credentials');
-  }
-
-  const data = await response.json();
+  const response = await authClient.post('/auth/login/admin', { email, password });
+  const data = response.data;
   if (data?.access_token) {
     setAuthToken(data.access_token);
   }
