@@ -385,26 +385,28 @@ export default function Login() {
 
         <div style={{ position: "relative", zIndex: 1, width: "100%", maxWidth: 400 }}>
           <div style={{ marginBottom: 36 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 14px", borderRadius: 20, background: "hsl(var(--primary)/0.10)", border: "1px solid hsl(var(--primary)/0.30)", marginBottom: 18 }}>
-              <ShieldCheck size={12} style={{ color: "hsl(var(--primary))" }} />
-              <span style={{ fontSize: 10, fontFamily: "JetBrains Mono,monospace", fontWeight: 700, letterSpacing: "0.22em", textTransform: "uppercase", color: "hsl(var(--primary))" }}>Administrator</span>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 14px", borderRadius: 20, background: "#fff4d6", border: "1px solid #e8c36c", marginBottom: 18 }}>
+              <ShieldCheck size={12} style={{ color: "#805300" }} />
+              <span style={{ fontSize: 10, fontFamily: "JetBrains Mono,monospace", fontWeight: 700, letterSpacing: "0.22em", textTransform: "uppercase", color: "#805300" }}>Administrator</span>
             </div>
-            <h2 style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.025em", color: "hsl(var(--foreground))", marginBottom: 10 }}>Welcome back.</h2>
-            <p style={{ fontSize: 14, color: "hsl(var(--muted-foreground))", lineHeight: 1.65 }}>Sign in with your administrator credentials to access the MOTOFIX control room.</p>
+            <h2 style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.025em", lineHeight: 1.15, color: "#171923", marginBottom: 10 }}>Welcome back.</h2>
+            <p style={{ fontSize: 14, color: "#4b5563", lineHeight: 1.65 }}>Sign in with your administrator credentials to access the MOTOFIX control room.</p>
           </div>
 
           <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "hsl(var(--primary))", marginBottom: 8 }}>Email Address</label>
+              <label htmlFor="admin-email" style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "#805300", marginBottom: 8 }}>Email Address</label>
               <div style={{ position: "relative" }}>
                 <Mail size={15} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--muted-foreground))" }} />
                 <input
+                  id="admin-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="admin@motofix.ug"
                   autoFocus={revealed}
                   autoComplete="email"
+                  required
                   style={{
                     width: "100%",
                     height: 50,
@@ -433,15 +435,17 @@ export default function Login() {
             </div>
 
             <div>
-              <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "hsl(var(--primary))", marginBottom: 8 }}>Password</label>
+              <label htmlFor="admin-password" style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase", color: "#805300", marginBottom: 8 }}>Password</label>
               <div style={{ position: "relative" }}>
                 <Lock size={15} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "hsl(var(--muted-foreground))" }} />
                 <input
+                  id="admin-password"
                   type={showPw ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter your password"
                   autoComplete="current-password"
+                  required
                   style={{
                     width: "100%",
                     height: 50,
@@ -466,7 +470,7 @@ export default function Login() {
                     e.target.style.boxShadow = "none";
                   }}
                 />
-                <button type="button" onClick={() => setShowPw((v) => !v)} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "hsl(var(--muted-foreground))", padding: 0, display: "flex" }}>
+                <button type="button" aria-label={showPw ? "Hide password" : "Show password"} aria-pressed={showPw} onClick={() => setShowPw((v) => !v)} style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#c6c7d2", padding: 0, display: "flex" }}>
                   {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
@@ -504,9 +508,9 @@ export default function Login() {
             </button>
           </form>
 
-          <div style={{ marginTop: 28, padding: "14px 16px", borderRadius: 12, background: "hsl(var(--muted))", border: "1px solid hsl(var(--border))", display: "flex", alignItems: "flex-start", gap: 10 }}>
+          <div style={{ marginTop: 28, padding: "14px 16px", borderRadius: 12, background: "#232334", border: "1px solid #39394e", display: "flex", alignItems: "flex-start", gap: 10 }}>
             <ShieldCheck size={15} style={{ color: "hsl(var(--primary))", flexShrink: 0, marginTop: 1 }} />
-            <p style={{ fontSize: 12, color: "hsl(var(--muted-foreground))", lineHeight: 1.65 }}>Restricted to authorised MOTOFIX administrators only. All access is logged and audited.</p>
+            <p style={{ fontSize: 12, color: "#d1d2dc", lineHeight: 1.65 }}>Restricted to authorised MOTOFIX administrators only. All access is logged and audited.</p>
           </div>
         </div>
 
