@@ -36,8 +36,8 @@ services:
     environment:
       SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
       ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_auth
-      DISPATCH_DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_auth
+      DISPATCH_DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_dispatch
       DISPATCH_SERVICE_URL: http://dispatch-service:8001
       ACCESS_TOKEN_EXPIRE_HOURS: ${ACCESS_TOKEN_EXPIRE_HOURS:-72}
       ADMIN_TOKEN_EXPIRE_HOURS: ${ADMIN_TOKEN_EXPIRE_HOURS:-12}
@@ -65,7 +65,7 @@ services:
     environment:
       SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
       ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_mechanics
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_mechanics
       TOKEN_EXPIRE_HOURS: ${TOKEN_EXPIRE_HOURS:-72}
       DISPATCH_SERVICE_URL: http://dispatch-service:8001
     expose: ["8002"]
@@ -85,7 +85,7 @@ services:
     environment:
       SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
       ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_dispatch
       NOTIFICATIONS_URL: http://notifications-service:8004
       MATCHING_SERVICE_URL: http://matching-service:8003
       GOOGLE_GEOCODING_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
@@ -129,7 +129,7 @@ services:
     environment:
       SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
       ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_matching
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_matching
       MECHANICS_SERVICE_URL: http://verification-service:8002
       LAUNCH_MODE: ${LAUNCH_MODE:-}
     expose: ["8003"]
@@ -167,8 +167,8 @@ services:
     environment:
       SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
       ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
-      AUTH_DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_auth
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_dispatch
+      AUTH_DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_auth
       ADMIN_JWT_SECRET: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
       PORT: "8005"
       CORS_ORIGINS: https://driver.motofix.org,https://provider.motofix.org,https://control.motofix.org
@@ -189,7 +189,7 @@ services:
     environment:
       SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
       ALGORITHM: ${JWT_ALGORITHM:-HS256}
-      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_insurance
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_insurance
     expose: ["8006"]
     depends_on:
       postgres:
@@ -206,7 +206,7 @@ services:
     build: ./services/motofix-analytics-service/notifications
     environment:
       PORT: "8004"
-      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD_URLENCODED:?Set MOTOFIX_DB_PASSWORD_URLENCODED in Coolify}@postgres:5432/motofix_dispatch
       AT_USERNAME: ${AT_USERNAME:-sandbox}
       AT_API_KEY: ${AT_API_KEY:-}
       FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
