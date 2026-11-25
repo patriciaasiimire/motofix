@@ -12,14 +12,15 @@ x-shared-db-env: &shared-db-env
 
 services:
   postgres:
-    image: postgres:18-alpine
+    build:
+      context: ./database
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${MOTOFIX_DB_PASSWORD:?Set MOTOFIX_DB_PASSWORD in Coolify}
     volumes:
       - postgres_data:/var/lib/postgresql
-      - ./database/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
     expose:
       - "5432"
     healthcheck:
