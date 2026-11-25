@@ -33,6 +33,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://driver.motofix.org",
+        "https://provider.motofix.org",
+        "https://control.motofix.org",
         "https://customer.motofix.org",
         "https://admin.motofix.org",
         "https://motofix-driver-assist.onrender.com",

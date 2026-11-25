@@ -541,6 +541,9 @@ except Exception as _e:  # pragma: no cover
 from fastapi.middleware.cors import CORSMiddleware
 
 ALLOWED_ORIGINS = [
+    "https://driver.motofix.org",
+    "https://provider.motofix.org",
+    "https://control.motofix.org",
     "https://motofixug.netlify.app",
     "https://motofix-driver-assist.onrender.com",
     "https://motofixug.onrender.com",

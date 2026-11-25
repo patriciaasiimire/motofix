@@ -1,0 +1,301 @@
+# MotoFix production Compose for Coolify.
+# First deploy with COMPOSE_PROFILES empty (database only), restore the six DB backups,
+# then set COMPOSE_PROFILES=apps and redeploy.
+
+x-app-defaults: &app-defaults
+  profiles: [apps]
+  restart: unless-stopped
+  init: true
+
+x-shared-db-env: &shared-db-env
+  POSTGRES_USER: postgres
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${MOTOFIX_DB_PASSWORD:?Set MOTOFIX_DB_PASSWORD in Coolify}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres -q"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  auth-service:
+    <<: *app-defaults
+    build: ./services/motofix-auth-service
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_auth
+      DISPATCH_DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
+      DISPATCH_SERVICE_URL: http://dispatch-service:8001
+      ACCESS_TOKEN_EXPIRE_HOURS: ${ACCESS_TOKEN_EXPIRE_HOURS:-72}
+      ADMIN_TOKEN_EXPIRE_HOURS: ${ADMIN_TOKEN_EXPIRE_HOURS:-12}
+      ENV: production
+      AT_USERNAME: ${AT_USERNAME:-sandbox}
+      AT_API_KEY: ${AT_API_KEY:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_MECHANIC_PASSWORD: ${SEED_MECHANIC_PASSWORD:-}
+    volumes:
+      - auth_uploads:/app/uploads
+    expose: ["8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  verification-service:
+    <<: *app-defaults
+    build: ./services/motofix-verification-service
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_mechanics
+      TOKEN_EXPIRE_HOURS: ${TOKEN_EXPIRE_HOURS:-72}
+      DISPATCH_SERVICE_URL: http://dispatch-service:8001
+    expose: ["8002"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  dispatch-service:
+    <<: *app-defaults
+    build: ./services/motofix-dispatch-service
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
+      NOTIFICATIONS_URL: http://notifications-service:8004
+      MATCHING_SERVICE_URL: http://matching-service:8003
+      GOOGLE_GEOCODING_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+      MOMO_ENVIRONMENT: ${MOMO_ENVIRONMENT:-sandbox}
+      MOMO_CURRENCY: ${MOMO_CURRENCY:-UGX}
+      MOMO_COLLECTIONS_USER_ID: ${MOMO_COLLECTIONS_USER_ID:-}
+      MOMO_COLLECTIONS_API_KEY: ${MOMO_COLLECTIONS_API_KEY:-}
+      MOMO_COLLECTIONS_PRIMARY_KEY: ${MOMO_COLLECTIONS_PRIMARY_KEY:-}
+      MOMO_DISBURSEMENTS_USER_ID: ${MOMO_DISBURSEMENTS_USER_ID:-}
+      MOMO_DISBURSEMENTS_API_KEY: ${MOMO_DISBURSEMENTS_API_KEY:-}
+      MOMO_DISBURSEMENTS_PRIMARY_KEY: ${MOMO_DISBURSEMENTS_PRIMARY_KEY:-}
+      AIRTEL_ENV: ${AIRTEL_ENV:-sandbox}
+      AIRTEL_CLIENT_ID: ${AIRTEL_CLIENT_ID:-}
+      AIRTEL_CLIENT_SECRET: ${AIRTEL_CLIENT_SECRET:-}
+      AIRTEL_MERCHANT_PIN: ${AIRTEL_MERCHANT_PIN:-}
+      SERVICE_VARIANT: ${SERVICE_VARIANT:-full}
+      MEDIA_DIR: /app/media
+      DISPATCH_PUBLIC_URL: https://dispatch.motofix.org
+    volumes:
+      - dispatch_media:/app/media
+    expose: ["8001"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      verification-service:
+        condition: service_healthy
+      analytics-service:
+        condition: service_started
+      notifications-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  matching-service:
+    <<: *app-defaults
+    build: ./services/motofix-matching-service
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_matching
+      MECHANICS_SERVICE_URL: http://verification-service:8002
+      LAUNCH_MODE: ${LAUNCH_MODE:-}
+    expose: ["8003"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      verification-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  diagnosis-service:
+    <<: *app-defaults
+    build: ./services/motofix-diagnosis-service
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    expose: ["8007"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  analytics-service:
+    <<: *app-defaults
+    build: ./services/motofix-analytics-service
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
+      AUTH_DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_auth
+      ADMIN_JWT_SECRET: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      PORT: "8005"
+      CORS_ORIGINS: https://driver.motofix.org,https://provider.motofix.org,https://control.motofix.org
+    expose: ["8005"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  insurance-service:
+    <<: *app-defaults
+    build: ./services/motofix-insurance-service
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_insurance
+    expose: ["8006"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  notifications-service:
+    <<: *app-defaults
+    build: ./services/motofix-analytics-service/notifications
+    environment:
+      PORT: "8004"
+      DATABASE_URL: postgresql://postgres:${MOTOFIX_DB_PASSWORD}@postgres:5432/motofix_dispatch
+      AT_USERNAME: ${AT_USERNAME:-sandbox}
+      AT_API_KEY: ${AT_API_KEY:-}
+      FCM_PROJECT_ID: ${FCM_PROJECT_ID:-}
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:-}
+    expose: ["8004"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  core-service:
+    <<: *app-defaults
+    build: ./services/motofix-core
+    environment:
+      SECRET_KEY: ${MOTOFIX_JWT_SECRET:?Set MOTOFIX_JWT_SECRET in Coolify}
+      ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ENV: production
+      AUTH_SERVICE_URL: http://auth-service:8000
+      DISPATCH_SERVICE_URL: http://dispatch-service:8001
+      VERIFICATION_SERVICE_URL: http://verification-service:8002
+      MATCHING_SERVICE_URL: http://matching-service:8003
+      NOTIFICATIONS_SERVICE_URL: http://notifications-service:8004
+      ANALYTICS_SERVICE_URL: http://analytics-service:8005
+      INSURANCE_SERVICE_URL: http://insurance-service:8006
+      DIAGNOSIS_SERVICE_URL: http://diagnosis-service:8007
+    expose: ["8008"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  driver-app:
+    <<: *app-defaults
+    build:
+      context: ./interfaces/motofix-driver-app
+      args:
+        VITE_API_AUTH_URL: https://auth.motofix.org
+        VITE_API_REQUESTS_URL: https://dispatch.motofix.org
+        VITE_API_DIAGNOSIS_URL: https://diagnosis.motofix.org
+        VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+        VITE_PROVIDER_URL: https://provider.motofix.org
+        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
+        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
+        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
+        VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET:-}
+        VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID:-}
+        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
+        VITE_FIREBASE_VAPID_KEY: ${VITE_FIREBASE_VAPID_KEY:-}
+    expose: ["80"]
+
+  service-provider-app:
+    <<: *app-defaults
+    build:
+      context: ./interfaces/motofix-service-provider-app
+      args:
+        VITE_API_AUTH_URL: https://auth.motofix.org
+        VITE_API_MECHANICS_URL: https://verification.motofix.org
+        VITE_API_REQUESTS_URL: https://dispatch.motofix.org
+        VITE_WS_URL: wss://dispatch.motofix.org/ws/jobs
+        VITE_API_DIAGNOSIS_URL: https://diagnosis.motofix.org
+        VITE_API_SUBSCRIPTIONS_URL: https://analytics.motofix.org
+        VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY:-}
+        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN:-}
+        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID:-}
+        VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET:-}
+        VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID:-}
+        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID:-}
+        VITE_FIREBASE_VAPID_KEY: ${VITE_FIREBASE_VAPID_KEY:-}
+    expose: ["80"]
+
+  admin-portal:
+    <<: *app-defaults
+    build:
+      context: ./interfaces/motofix-admin-portal
+      args:
+        VITE_API_BASE_URL: https://analytics.motofix.org
+        VITE_API_AUTH_URL: https://auth.motofix.org
+        VITE_API_REQUESTS_URL: https://dispatch.motofix.org
+        VITE_API_MECHANICS_URL: https://auth.motofix.org/auth
+    expose: ["80"]
+
+volumes:
+  postgres_data:
+  auth_uploads:
+  dispatch_media:

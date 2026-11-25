@@ -84,6 +84,9 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 
 _ALLOWED_ORIGINS = [
+    "https://driver.motofix.org",
+    "https://provider.motofix.org",
+    "https://control.motofix.org",
     "https://customer.motofix.org",
     "https://admin.motofix.org",
     "https://motofix.org",

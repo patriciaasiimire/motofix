@@ -25,6 +25,9 @@ def _origin_allowed(origin: str | None) -> bool:
 
 # Production-safe allowed origins - NO wildcards
 ALLOWED_ORIGINS = [
+    "https://driver.motofix.org",
+    "https://provider.motofix.org",
+    "https://control.motofix.org",
     "https://motofixug.netlify.app",   # Production V1 driver web app
     "https://localhost",               # Capacitor Android WebView
     "capacitor://localhost",            # Capacitor legacy/custom WebView origin

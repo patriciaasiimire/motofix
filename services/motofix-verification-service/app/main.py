@@ -130,6 +130,9 @@ app = FastAPI(
 
 # ────────────────────────────── CORS ──────────────────────────────
 ALLOWED_ORIGINS = [
+    "https://driver.motofix.org",
+    "https://provider.motofix.org",
+    "https://control.motofix.org",
     "https://motofix.org",
     "https://motofixug.netlify.app",
     "http://localhost:3000",

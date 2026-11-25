@@ -56,6 +56,43 @@ major version.
 5. **Restore the six database dumps** after the VPS PostgreSQL service is
    healthy, and verify the services connect to the intended databases.
 
+## Coolify Compose staging file
+
+`docker-compose.coolify.yml` is the VPS configuration. It keeps PostgreSQL
+private, removes host-published ports, pins PostgreSQL 18 to match the local
+backup source, and puts app containers behind the `apps` Compose profile.
+
+1. Add the Git repository on branch `release/v1` as a Docker Compose resource
+   and set its Compose file to `docker-compose.coolify.yml`.
+2. Add `MOTOFIX_DB_PASSWORD` and `MOTOFIX_JWT_SECRET` in Coolify as secrets.
+   Use a new alphanumeric database password so it can safely appear in internal
+   PostgreSQL connection strings. Do not reuse the old Neon or chat-pasted
+   secrets.
+3. Deploy with `COMPOSE_PROFILES` unset. This starts only PostgreSQL. Restore
+   the six database dumps into the existing empty databases before starting
+   applications.
+4. Set `COMPOSE_PROFILES=apps` and add the optional third-party integration
+   variables only if those features are needed. Redeploy to start the backend
+   services and web apps.
+5. Add Coolify Domains for the frontend services and API services, using their
+   internal ports from the table below. Do not add host port mappings. The DNS
+   wildcard already directs new subdomains to the VPS; existing explicit
+   `admin`, `customer`, and `www` records still take precedence.
+
+Required shared secrets:
+
+- `MOTOFIX_DB_PASSWORD`
+- `MOTOFIX_JWT_SECRET` (also used by Analytics for admin-token validation)
+
+Optional integration/build variables include `AT_USERNAME`, `AT_API_KEY`,
+`VITE_GOOGLE_MAPS_API_KEY`, `VITE_FIREBASE_*`,
+`FIREBASE_SERVICE_ACCOUNT_JSON`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, and the
+MTN MoMo/Airtel credentials. Payments remain in sandbox mode unless valid
+provider credentials and production configuration are deliberately supplied.
+
+Backend CORS allowlists now include `driver.motofix.org`,
+`provider.motofix.org`, and `control.motofix.org`.
+
 ## Local code changes prepared for Coolify
 
 - Driver production builds now accept a configured public HTTPS Auth URL instead
@@ -80,7 +117,32 @@ credentials in Coolify only for features you intend to use:
 
 ## Public URL plan
 
-The domain names are not available in this workspace yet. Use Coolify-generated
-temporary HTTPS URLs first, then replace them with the permanent domains and
-rebuild the web apps. The driver Android workflow also needs its API and provider
-URLs set in GitHub Actions variables/secrets before generating a production APK.
+Namecheap now has a wildcard A record `*.motofix.org` pointing to the VPS IPv4
+address. Existing explicit records for `admin`, `customer`, and `www` still
+point to Render and take precedence over the wildcard. Keep those records until
+the Coolify versions are ready; use `control.motofix.org` for the admin portal
+initially to avoid the existing `admin` record.
+
+Suggested Coolify hostnames and internal target ports:
+
+| Hostname | Compose service | Container port | Public? |
+|---|---|---:|---|
+| `driver.motofix.org` | `driver-app` | 80 | Yes |
+| `provider.motofix.org` | `service-provider-app` | 80 | Yes |
+| `control.motofix.org` | `admin-portal` | 80 | Yes |
+| `auth.motofix.org` | `auth-service` | 8000 | Yes |
+| `dispatch.motofix.org` | `dispatch-service` | 8001 | Yes, including `/ws/jobs` over WSS |
+| `verification.motofix.org` | `verification-service` | 8002 | Yes |
+| `matching.motofix.org` | `matching-service` | 8003 | Yes |
+| `notifications.motofix.org` | `notifications-service` | 8004 | Yes, for the admin app |
+| `analytics.motofix.org` | `analytics-service` | 8005 | Yes |
+| `insurance.motofix.org` | `insurance-service` | 8006 | Yes |
+| `diagnosis.motofix.org` | `diagnosis-service` | 8007 | Yes, if its app features are enabled |
+| none | `core-service` | 8008 | Keep internal |
+| none | `postgres` | 5432 | Keep private |
+
+Coolify must route these hostnames to the corresponding service ports and issue
+HTTPS certificates after DNS resolves. The driver Android workflow also needs
+its API and provider URLs set in GitHub Actions variables/secrets before
+generating a production APK. Rebuild frontend apps after changing their baked-in
+API URLs.
