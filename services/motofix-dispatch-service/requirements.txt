@@ -16,6 +16,7 @@ httpx==0.28.1
 idna==3.11
 iniconfig==2.3.0
 packaging==25.0
+psycopg2-binary==2.9.13
 pluggy==1.6.0
 pyasn1==0.6.1
 pydantic==2.12.5
