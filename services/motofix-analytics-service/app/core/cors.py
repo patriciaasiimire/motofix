@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 # Production-safe allowed origins - NO wildcards
 ALLOWED_ORIGINS = [
+    "https://driver.motofix.org",
+    "https://provider.motofix.org",
+    "https://control.motofix.org",
     "https://customer.motofix.org",      # Primary customer/driver app
     "https://admin.motofix.org",         # Admin dashboard
     "https://motofix.org",               # Main domain

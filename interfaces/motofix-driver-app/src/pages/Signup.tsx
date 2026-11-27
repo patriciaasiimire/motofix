@@ -6,8 +6,9 @@ import { useNavigate } from "react-router-dom";
 import { User, Phone, Car, ArrowRight, ArrowLeft, Loader2, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { authService } from "@/config/api";
+import { authService, getAuthErrorDiagnostics, getAuthErrorMessage } from "@/config/api";
 import { toast } from "sonner";
+import axios from "axios";
 
 type Phase = "form" | "otp";
 
@@ -50,6 +51,7 @@ export default function Signup() {
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+  const [authFailureDetails, setAuthFailureDetails] = useState<string | null>(null);
   const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Form values
@@ -83,13 +85,14 @@ export default function Signup() {
 
   const handleResend = async () => {
     if (cooldown > 0 || resending) return;
+    setAuthFailureDetails(null);
     setResending(true);
     try {
       let res;
       try {
         res = await authService.resendOtp(phone);
-      } catch (resendErr: any) {
-        if (resendErr.response?.status === 404) {
+      } catch (resendErr: unknown) {
+        if (axios.isAxiosError(resendErr) && resendErr.response?.status === 404) {
           res = await authService.sendOtp(phone, fullName, numberPlate || undefined);
         } else {
           throw resendErr;
@@ -97,8 +100,9 @@ export default function Signup() {
       }
       startCooldown();
       toast.success(res.data?.message ?? "New verification code sent", { duration: 5000 });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail?.message || err.message || "Failed to resend code");
+    } catch (err: unknown) {
+      setAuthFailureDetails(getAuthErrorDiagnostics(err));
+      toast.error(getAuthErrorMessage(err));
     } finally {
       setResending(false);
     }
@@ -133,6 +137,7 @@ export default function Signup() {
       return;
     }
 
+    setAuthFailureDetails(null);
     setLoading(true);
     try {
       const res = await authService.sendOtp(fmt, name, numberPlate.trim() || undefined);
@@ -140,8 +145,9 @@ export default function Signup() {
       setPhase("otp");
       startCooldown();
       toast.success(res.data?.message ?? "Verification code sent", { duration: 5000 });
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail?.message || err.message || "Failed to send code");
+    } catch (err: unknown) {
+      setAuthFailureDetails(getAuthErrorDiagnostics(err));
+      toast.error(getAuthErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -205,6 +211,11 @@ export default function Signup() {
               Enter the 6-digit code sent to <span className="text-foreground font-semibold">{phone}</span>.
             </p>
           </>
+        )}
+        {import.meta.env.DEV && authFailureDetails && (
+          <pre className="mt-4 whitespace-pre-wrap break-all rounded-lg bg-black/10 p-3 text-xs text-muted-foreground">
+            {authFailureDetails}
+          </pre>
         )}
       </div>
 
