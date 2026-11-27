@@ -4,14 +4,15 @@
 // confirmed nothing still imports it.
 
 import axios from "axios";
+import { debugLog } from "@/utils/debug";
 
 // Base URLs for microservices
-export const AUTH_BASE_URL = import.meta.env.VITE_API_AUTH_URL || "https://motofix-auth-service.onrender.com";
+export const AUTH_BASE_URL = import.meta.env.VITE_API_AUTH_URL ?? "";
 export const REQUESTS_BASE_URL = import.meta.env.VITE_API_REQUESTS_URL || "https://motofix-service-requests.onrender.com";
 export const PAYMENTS_BASE_URL = import.meta.env.VITE_API_PAYMENTS_URL || "https://motofix-payments-service.onrender.com";
 
 // Add startup logging
-console.log("🚀 Initializing Motofix API:", {
+debugLog("🚀 Initializing Motofix API:", {
   AUTH_BASE_URL,
   REQUESTS_BASE_URL,
   PAYMENTS_BASE_URL,
@@ -58,9 +59,8 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
       if (typeof FormData !== "undefined" && config.data instanceof FormData) {
         delete config.headers["Content-Type"];
       }
-      console.log(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
+      debugLog(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
         hasToken: !!token,
-        headers: config.headers,
       });
       return config;
     },
@@ -72,7 +72,7 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
 
   instance.interceptors.response.use(
     (response) => {
-      console.log(`📥 Response from ${response.config.url}:`, response.status, response.data);
+      debugLog(`📥 Response from ${response.config.url}:`, response.status);
       return response;
     },
     (error) => {
@@ -96,17 +96,32 @@ addAuthInterceptor(authApi);
 addAuthInterceptor(requestsApi);
 addAuthInterceptor(paymentsApi);
 
+const authOtpUrl = (path: string) =>
+  AUTH_BASE_URL
+    ? new URL(path.replace(/^\/+/, ""), `${AUTH_BASE_URL.replace(/\/+$/, "")}/`).href
+    : path;
+
 // Auth API functions
 export const authService = {
-  sendOtp: (phone: string) => authApi.post("/auth/send-otp", { phone }),
+  sendOtp: (phone: string, fullName?: string, numberPlate?: string) =>
+    authApi.post(authOtpUrl("/auth/register/driver"), {
+      phone,
+      ...(fullName ? { full_name: fullName } : {}),
+      ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
+    }, { timeout: 60_000 }),
 
   login: (phone: string, otp: string, fullName?: string) =>
-    authApi.post("/auth/login", {
+    authApi.post(authOtpUrl("/auth/verify-otp"), {
       phone,
-      otp,
-      full_name: fullName,
-      role: "driver",
-    }),
+      otp_code: otp,
+      ...(fullName ? { full_name: fullName } : {}),
+    }, { timeout: 60_000 }),
+
+  resendOtp: (phone: string) => authApi.post(
+    authOtpUrl("/auth/resend-otp"),
+    { phone },
+    { timeout: 60_000 },
+  ),
 
   logout: () => authApi.post("/auth/logout"),
 

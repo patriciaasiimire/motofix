@@ -15,6 +15,7 @@
 
 import logging
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -24,6 +25,7 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from jose import JWTError, jwt
 
 load_dotenv()
@@ -109,7 +111,7 @@ app = FastAPI(
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 _ALLOWED_ORIGINS = [
-    "https://customer.motofix.org",
+    "https://motofixug.netlify.app",
     "https://admin.motofix.org",
     "https://motofix.org",
     "http://localhost:3000",
@@ -168,12 +170,49 @@ def _require_token(authorization: str = Header(...)) -> dict:
 
 @app.get("/health", tags=["system"])
 async def health():
-    return {
-        "status": "ok",
-        "service": "mechanic-matching",
-        "jwt_secret_configured": bool(os.getenv("SECRET_KEY")),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    return {"status": "ok"}
+
+
+async def _get_mechanics_with_retries(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    retry_delays = (3, 8)
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            response = await client.get(
+                url,
+                params={"verified_only": "true", "available_only": "true"},
+            )
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            if attempt == len(retry_delays):
+                raise
+            delay = retry_delays[attempt]
+            logger.warning(
+                "Mechanic Verification Service request failed (%s); retry %s/2 in %ss",
+                type(exc).__name__,
+                attempt + 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        if response.status_code in (502, 503, 504):
+            if attempt == len(retry_delays):
+                logger.error(
+                    "Mechanic Verification Service remained unavailable after retries (HTTP %s)",
+                    response.status_code,
+                )
+                return response
+            delay = retry_delays[attempt]
+            logger.warning(
+                "Mechanic Verification Service returned HTTP %s; retry %s/2 in %ss",
+                response.status_code,
+                attempt + 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+        return response
+
+    raise RuntimeError("Mechanic Verification Service retry loop ended unexpectedly")
 
 
 @app.post("/match", response_model=MatchResponse, tags=["matching"])
@@ -202,13 +241,14 @@ async def match_mechanics(
             excluded_ids.extend(r["mechanic_id"] for r in rows)
 
     # Fetch verified mechanics from the Mechanic Verification Service
-    async with httpx.AsyncClient(follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
         try:
-            resp = await client.get(
-                f"{MECHANICS_SERVICE_URL}/mechanics",
-                params={"verified_only": "true", "available_only": "true"},
-                timeout=10.0,
-            )
+            resp = await _get_mechanics_with_retries(client, f"{MECHANICS_SERVICE_URL}/mechanics")
+            if resp.status_code in (502, 503, 504):
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "matching_unavailable", "retry_after": 10},
+                )
             resp.raise_for_status()
             payload = resp.json()
             if isinstance(payload, list):
@@ -225,19 +265,18 @@ async def match_mechanics(
             raise
         except httpx.HTTPStatusError as exc:
             logger.error(
-                "Mechanic Verification Service returned HTTP %s: %s",
+                "Mechanic Verification Service returned HTTP %s",
                 exc.response.status_code,
-                exc.response.text[:300],
             )
-            raise HTTPException(
-                status_code=502,
-                detail=f"Mechanic Verification Service returned HTTP {exc.response.status_code}.",
-            )
-        except Exception as exc:
-            logger.error("Failed to reach Mechanic Verification Service: %s", exc)
-            raise HTTPException(
+            return JSONResponse(
                 status_code=503,
-                detail=f"Could not reach Mechanic Verification Service: {exc}",
+                content={"detail": "matching_unavailable", "retry_after": 10},
+            )
+        except httpx.RequestError as exc:
+            logger.error("Failed to reach Mechanic Verification Service: %s", type(exc).__name__)
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "matching_unavailable", "retry_after": 10},
             )
 
     # Resolve the matching area id. The v1 flow passes an integer launch-area id

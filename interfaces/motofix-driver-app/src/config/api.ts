@@ -18,17 +18,74 @@
 
 import axios from 'axios';
 import { noteServerDate } from '@/utils/serverClock';
+import { debugLog } from '@/utils/debug';
+import { getWakeRetryDelayMs } from '@/utils/coldStart';
 
-// Base URLs for microservices — empty string routes through the Vite dev proxy
-export const AUTH_BASE_URL      = import.meta.env.VITE_API_AUTH_URL      ?? '';
-export const REQUESTS_BASE_URL  = import.meta.env.VITE_API_REQUESTS_URL  ?? '';
-export const PAYMENTS_BASE_URL  = import.meta.env.VITE_API_PAYMENTS_URL  ?? '';
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    __networkRetryCount?: number;
+    __wakeStartedAt?: number;
+    __networkRetryNoticeActive?: boolean;
+  }
+}
+
+let activeNetworkRetryRequests = 0;
+// If the server is genuinely down, background polling would otherwise start a new
+// retry chain every few seconds. Beyond this many at once, new failures just fail.
+const MAX_CONCURRENT_RETRY_CHAINS = 8;
+
+function setNetworkRetryNotice(
+  config: axios.InternalAxiosRequestConfig,
+  active: boolean,
+  enabled: boolean,
+) {
+  if (!enabled) return;
+  if (
+    config.__networkRetryNoticeActive === active ||
+    (!active && !config.__networkRetryNoticeActive)
+  ) return;
+  config.__networkRetryNoticeActive = active;
+  activeNetworkRetryRequests = Math.max(0, activeNetworkRetryRequests + (active ? 1 : -1));
+  window.dispatchEvent(new CustomEvent('motofix:api-retry', {
+    detail: { active: activeNetworkRetryRequests > 0 },
+  }));
+}
+
+// Local development continues to use the Vite proxy. Production builds require
+// VITE_API_AUTH_URL and validate it in vite.config.ts before bundling.
+const serviceUrl = (configured: string | undefined, productionUrl: string) =>
+  configured || (import.meta.env.PROD ? productionUrl : '');
+
+export const AUTH_BASE_URL = import.meta.env.VITE_API_AUTH_URL ?? '';
+if (import.meta.env.PROD) {
+  let authUrl: URL;
+  try {
+    authUrl = new URL(AUTH_BASE_URL);
+  } catch {
+    throw new Error('Production build requires a valid VITE_API_AUTH_URL.');
+  }
+  if (
+    authUrl.origin !== 'https://motofix-auth.onrender.com' ||
+    authUrl.pathname !== '/' ||
+    authUrl.search ||
+    authUrl.hash
+  ) {
+    throw new Error('Production VITE_API_AUTH_URL must be https://motofix-auth.onrender.com.');
+  }
+}
+export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_URL, 'https://motofix-dispatch.onrender.com');
+export const PAYMENTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_PAYMENTS_URL, 'https://motofix-dispatch.onrender.com');
 export const DIAGNOSIS_BASE_URL = import.meta.env.VITE_API_DIAGNOSIS_URL ?? '';
-export const MATCHING_BASE_URL  = import.meta.env.VITE_API_MATCHING_URL  ?? '';
+export const MATCHING_BASE_URL  = serviceUrl(import.meta.env.VITE_API_MATCHING_URL, 'https://motofix-matching.onrender.com');
+// The mechanic-verification service is only called by the matching service, but the app
+// wakes it up early (see utils/warmup.ts) so mechanic lookups are not delayed by a cold start.
+export const MECHANICS_BASE_URL = serviceUrl(import.meta.env.VITE_API_MECHANICS_URL, 'https://motofix-verification.onrender.com');
 export const INSURANCE_BASE_URL = import.meta.env.VITE_API_INSURANCE_URL ?? '';
+const requestsWsBase = REQUESTS_BASE_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+export const WS_URL = import.meta.env.VITE_WS_URL || (requestsWsBase ? `${requestsWsBase}/ws/jobs` : '');
 
 // Add startup logging
-console.log('🚀 Initializing Motofix API:', {
+debugLog('🚀 Initializing Motofix API:', {
   AUTH_BASE_URL,
   REQUESTS_BASE_URL,
   PAYMENTS_BASE_URL,
@@ -43,8 +100,13 @@ export const authApi = axios.create({
     'Content-Type': 'application/json',
   },
   withCredentials: true, // send/receive httpOnly cookies from the API
-  timeout: 30000, // 30s for slow networks
+  timeout: 30000, // 30s for slow networks; OTP operations override this for Render cold starts.
 });
+
+function authEndpoint(path: string): string {
+  if (!AUTH_BASE_URL) return path;
+  return new URL(path.replace(/^\/+/, ''), `${AUTH_BASE_URL.replace(/\/+$/, '')}/`).href;
+}
 
 export const requestsApi = axios.create({
   baseURL: REQUESTS_BASE_URL,
@@ -93,13 +155,15 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
+      // Remember when this request first started, so retries for a sleeping server
+      // (see utils/coldStart.ts) can stop after a sensible total time.
+      if (config.__wakeStartedAt === undefined) config.__wakeStartedAt = Date.now();
       // FormData: let browser set Content-Type with boundary (do not send application/json)
       if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
         delete config.headers['Content-Type'];
       }
-      console.log(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
+      debugLog(`📤 ${config.method?.toUpperCase()} ${config.url}`, {
         hasToken: !!token,
-        headers: config.headers,
       });
       return config;
     },
@@ -111,22 +175,53 @@ const addAuthInterceptor = (instance: ReturnType<typeof axios.create>) => {
 
   instance.interceptors.response.use(
     (response) => {
+      setNetworkRetryNotice(response.config, false, instance === authApi);
       // Keep the device's clock in step with the server (for the journey sim).
       noteServerDate(response.headers?.['date']);
-      console.log(`📥 Response from ${response.config.url}:`, response.status, response.data);
+      debugLog(`📥 Response from ${response.config.url}:`, response.status);
       return response;
     },
     (error) => {
-      console.error('❌ Response error:', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        url: error.config?.url,
-        fullUrl: `${error.config?.baseURL || ''}${error.config?.url || ''}`,
-        method: error.config?.method,
-        data: error.response?.data,
-        rawResponse: error.response,
-        message: error.message,
-      });
+      const config = axios.isAxiosError(error) ? error.config : undefined;
+      const retryCount = config?.__networkRetryCount ?? 0;
+      // A sleeping Render service answers with no response at all (shown by the browser as
+      // a "network error") or a 502/503/504 while it wakes up. Retry those for up to ~90s
+      // instead of giving up after a few seconds. See utils/coldStart.ts for the rules.
+      const tooManyRetryChains =
+        retryCount === 0 && activeNetworkRetryRequests >= MAX_CONCURRENT_RETRY_CHAINS;
+      const retryDelay = config && axios.isAxiosError(error) && !tooManyRetryChains
+        ? getWakeRetryDelayMs({
+            method: config.method,
+            url: config.url,
+            attempt: retryCount,
+            elapsedMs: Date.now() - (config.__wakeStartedAt ?? Date.now()),
+            hasResponse: !!error.response,
+            status: error.response?.status,
+            code: error.code,
+            retryAfterSeconds: Number(error.response?.data?.retry_after) || undefined,
+          })
+        : null;
+      if (config && retryDelay !== null) {
+        config.__networkRetryCount = retryCount + 1;
+        setNetworkRetryNotice(config, true, instance === authApi);
+        debugLog(`[api] Server not ready; retry ${retryCount + 1} in ${retryDelay}ms.`);
+        return new Promise((resolve) => setTimeout(resolve, retryDelay))
+          .then(() => instance.request(config));
+      }
+      if (config) setNetworkRetryNotice(config, false, instance === authApi);
+      if (import.meta.env.DEV) {
+        const failure = {
+          status: error.response?.status,
+          url: error.config?.url,
+          fullUrl: error.config?.url
+            ? new URL(error.config.url, error.config.baseURL || window.location.href).href
+            : error.config?.baseURL,
+          method: error.config?.method,
+          code: error.code,
+          message: error.message,
+        };
+        console.error('❌ Response error:', failure);
+      }
       
       return Promise.reject(error);
     }
@@ -140,23 +235,73 @@ addAuthInterceptor(diagnosisApi);
 addAuthInterceptor(matchingApi);
 addAuthInterceptor(insuranceApi);
 
+export function getAuthErrorMessage(error: unknown): string {
+  if (!axios.isAxiosError(error)) {
+    return error instanceof Error ? error.message : "Can't reach the server. Check your connection";
+  }
+  if (
+    error.code === 'ECONNABORTED' ||
+    error.code === 'ETIMEDOUT' ||
+    error.response?.status === 408 ||
+    error.response?.status === 504
+  ) {
+    return 'The server timed out. Please try again';
+  }
+  if (error.response && error.response.status >= 500) {
+    return 'Server error, please try again';
+  }
+  if (error.response && error.response.status >= 400) {
+    const detail = error.response.data?.detail;
+    if (typeof detail === 'string') return detail;
+    if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') {
+      return detail.message;
+    }
+    if (Array.isArray(detail) && typeof detail[0]?.msg === 'string') return detail[0].msg;
+    return `Request failed (HTTP ${error.response.status})`;
+  }
+  if (!error.response) {
+    return "Can't reach the server. Check your connection";
+  }
+  return error.message || 'Server error, please try again';
+}
+
+export function getAuthErrorDiagnostics(error: unknown): string | null {
+  if (!axios.isAxiosError(error)) return null;
+  const config = error.config;
+  let url = config?.url ?? 'unknown';
+  if (config?.url) {
+    try {
+      url = new URL(config.url, config.baseURL || window.location.href).href;
+    } catch {
+      url = `${config.baseURL}${config.url}`;
+    }
+  }
+  return [
+    `Method: ${(config?.method ?? 'unknown').toUpperCase()}`,
+    `URL: ${url}`,
+    `Status: ${error.response?.status ?? 'no response'}`,
+    `Axios code: ${error.code ?? 'none'}`,
+    `Message: ${error.message}`,
+  ].join('\n');
+}
+
 // Auth API functions
 export const authService = {
   sendOtp: (phone: string, fullName?: string, numberPlate?: string) =>
-    authApi.post('/auth/register/driver', {
-      phone,
-      ...(fullName    ? { full_name:    fullName }                         : {}),
-      ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
-    }),
+    authApi.post(authEndpoint('/auth/register/driver'), {
+        phone,
+        ...(fullName    ? { full_name:    fullName }                         : {}),
+        ...(numberPlate ? { number_plate: numberPlate.trim().toUpperCase() } : {}),
+      }, { timeout: 60_000 }),
 
   login: (phone: string, otp: string) =>
-    authApi.post('/auth/verify-otp', {
+    authApi.post(authEndpoint('/auth/verify-otp'), {
       phone,
       otp_code: otp,
-    }),
+    }, { timeout: 60_000 }),
 
   resendOtp: (phone: string) =>
-    authApi.post('/auth/resend-otp', { phone }),
+    authApi.post(authEndpoint('/auth/resend-otp'), { phone }, { timeout: 60_000 }),
 
   logout: () => authApi.post('/auth/logout'),
 
@@ -242,7 +387,7 @@ export const requestsService = {
     return requestsApi.post('/requests-with-media/', formData);
   },
   
-  getAll: () => requestsApi.get('/requests/'),
+  getAll: () => requestsApi.get('/requests/', { timeout: 12_000 }),
   
   getById: (id: string) => requestsApi.get(`/requests/${id}`),
 
@@ -258,7 +403,7 @@ export const requestsService = {
     requestsApi.get<{ phone: string }>(`/requests/${id}/call-partner`),
 
   // Feature flags are DB-backed and vary by deployment via `SERVICE_VARIANT`
-  getFeatureFlags: () => requestsApi.get('/feature-flags'),
+  getFeatureFlags: () => requestsApi.get('/feature-flags', { timeout: 12_000 }),
 
   redispatch: (id: string) =>
     requestsApi.post(`/requests/${id}/redispatch`),
