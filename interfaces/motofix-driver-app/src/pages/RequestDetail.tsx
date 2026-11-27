@@ -726,6 +726,7 @@ export default function RequestDetail() {
   // Always watch device GPS on this page — the live position is the source of truth.
   // GPS stops only when request is completed or cancelled (nothing left to track).
   const hasStoredLocation = (request?.latitude != null && request?.longitude != null) || mapCoords != null;
+  const requestStatus = request?.status;
   const isActive = !!request && hasStoredLocation &&
     !['completed', 'cancelled', 'awaiting_confirmation'].includes(request?.status ?? '');
   const { lat: gpsLat, lng: gpsLng, accuracy: gpsAccuracy } = useGeoLocation(isActive);
@@ -745,7 +746,6 @@ export default function RequestDetail() {
   }, [id, requests]);
 
   useEffect(() => {
-    const requestStatus = request?.status;
     if (!id || !requestStatus || isWsConnected || ['completed', 'cancelled'].includes(requestStatus)) return;
 
     const refreshActiveRequest = () => {
