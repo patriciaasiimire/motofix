@@ -48,6 +48,7 @@ def _normalize_preferences(raw) -> dict:
 class UserProfileUpdate(BaseModel):
     full_name:    Optional[str] = None
     number_plate: Optional[str] = None
+    national_id_number: Optional[str] = None
 
 
 class FcmTokenUpdate(BaseModel):

@@ -77,6 +77,7 @@ async def lifespan(app: FastAPI):
                 full_name    TEXT DEFAULT '',
                 role         TEXT NOT NULL DEFAULT 'driver',
                 number_plate TEXT,
+                national_id_number TEXT,
                 fcm_token    TEXT,
                 created_at   TIMESTAMPTZ DEFAULT NOW()
             )
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI):
         # Idempotent column additions for older deployments
         for col_sql in [
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS number_plate TEXT",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS national_id_number TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle_type TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS fcm_token TEXT",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",

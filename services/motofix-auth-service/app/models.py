@@ -28,6 +28,7 @@ class User(Base):
     full_name    = Column(String, nullable=True)
     role         = Column(String, nullable=False, default="customer")
     number_plate = Column(String, nullable=True)
+    national_id_number = Column(String, nullable=True)
     fcm_token    = Column(Text, nullable=True)
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
 
