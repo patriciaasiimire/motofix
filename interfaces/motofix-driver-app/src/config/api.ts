@@ -74,14 +74,14 @@ if (import.meta.env.PROD) {
     throw new Error('Production VITE_API_AUTH_URL must be a public HTTPS origin.');
   }
 }
-export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_URL, 'https://motofix-dispatch.onrender.com');
-export const PAYMENTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_PAYMENTS_URL, 'https://motofix-dispatch.onrender.com');
-export const DIAGNOSIS_BASE_URL = import.meta.env.VITE_API_DIAGNOSIS_URL ?? '';
-export const MATCHING_BASE_URL  = serviceUrl(import.meta.env.VITE_API_MATCHING_URL, 'https://motofix-matching.onrender.com');
+export const REQUESTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_REQUESTS_URL, 'https://dispatch.motofix.org');
+export const PAYMENTS_BASE_URL  = serviceUrl(import.meta.env.VITE_API_PAYMENTS_URL, 'https://dispatch.motofix.org');
+export const DIAGNOSIS_BASE_URL = serviceUrl(import.meta.env.VITE_API_DIAGNOSIS_URL, 'https://diagnosis.motofix.org');
+export const MATCHING_BASE_URL  = serviceUrl(import.meta.env.VITE_API_MATCHING_URL, 'https://matching.motofix.org');
 // The mechanic-verification service is only called by the matching service, but the app
 // wakes it up early (see utils/warmup.ts) so mechanic lookups are not delayed by a cold start.
-export const MECHANICS_BASE_URL = serviceUrl(import.meta.env.VITE_API_MECHANICS_URL, 'https://motofix-verification.onrender.com');
-export const INSURANCE_BASE_URL = import.meta.env.VITE_API_INSURANCE_URL ?? '';
+export const MECHANICS_BASE_URL = serviceUrl(import.meta.env.VITE_API_MECHANICS_URL, 'https://verification.motofix.org');
+export const INSURANCE_BASE_URL = serviceUrl(import.meta.env.VITE_API_INSURANCE_URL, 'https://insurance.motofix.org');
 const requestsWsBase = REQUESTS_BASE_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 export const WS_URL = import.meta.env.VITE_WS_URL || (requestsWsBase ? `${requestsWsBase}/ws/jobs` : '');
 

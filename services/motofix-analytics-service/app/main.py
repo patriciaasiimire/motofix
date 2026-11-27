@@ -35,6 +35,7 @@ env_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.
 # Always include production and common dev URLs
 allowed_origins = [
     "https://admin.motofix.org",                     # Admin dashboard (PRIMARY)
+    "https://provider.motofix.org",                  # Service provider app subscriptions
     "https://customer.motofix.org",                  # Customer app
     "https://motofix-control-center.onrender.com",   # Production frontend
     "https://motofix-driver-assist.onrender.com",    # Live driver app
